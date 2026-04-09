@@ -1,0 +1,1599 @@
+  const F = {
+    图片: "图片", 文件名: "文件名", 黑白彩色: "黑白/彩色", 清晰度: "图片清晰度", 字数: "文字数量",
+    原型: "人物原型", 直接: "情绪表达是否直接", 包装: "情绪包装度（1-5）", 备注: "编码备注",
+    阶段: "阶段", 动作: "动作特征", 平台: "早期典型传播平台", 模板: "模板类型", 来源: "图像来源类型"
+  };
+const FILTER_KEYS = [
+    F.图片, F.黑白彩色, F.清晰度, F.字数, F.原型, F.直接, F.包装, F.阶段, F.动作, F.平台, F.模板, F.来源
+  ];
+  const PAL = ["#F54595", "#59E2FD", "#6C58EE", "#FCE500"];
+  const PAL_LEGEND = ["粉洋红", "青色", "紫色", "黄色"];
+  /** 逐字显现：相邻字符延迟（秒），越小越快 */
+  const PIX_CHAR_STAGGER = 0.0065;
+  /** 右侧图注专用：更短间隔 */
+  const PIX_CAP_STAGGER = 0.0018;
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  /** 坐标区网格：略加粗、加密、更易辨认 */
+  const CHART_GRID_STROKE = "rgba(255,255,255,0.44)";
+  const CHART_GRID_W = 0.72;
+  const CHART_AXIS_DOMAIN_STROKE = "rgba(255,255,255,0.68)";
+  const CHART_AXIS_TICK_STROKE = "rgba(255,255,255,0.5)";
+  const CHART_AXIS_TICK_W = 0.78;
+
+  function revealStrokeLine(sel, dur, delay) {
+    const dMs = dur == null ? 620 : dur;
+    const dDel = delay == null ? 0 : delay;
+    sel.each(function () {
+      const node = this;
+      if (typeof node.getTotalLength === "function") {
+        try {
+          const len = node.getTotalLength();
+          if (len > 0) {
+            d3.select(node)
+              .attr("stroke-dasharray", len + " " + len)
+              .attr("stroke-dashoffset", len)
+              .transition()
+              .delay(dDel)
+              .duration(dMs)
+              .ease(d3.easeCubicOut)
+              .attr("stroke-dashoffset", 0);
+            return;
+          }
+        } catch (er) { /* fallthrough */ }
+      }
+      d3.select(node).attr("opacity", 0)
+        .transition().delay(dDel).duration(320).ease(d3.easeCubicOut).attr("opacity", 1);
+    });
+  }
+
+  function revealCircleStroke(sel, r, dur, delay) {
+    const len = 2 * Math.PI * r;
+    const dMs = dur == null ? 720 : dur;
+    const dDel = delay == null ? 0 : delay;
+    sel.attr("fill", "none")
+      .attr("stroke-dasharray", len + " " + len)
+      .attr("stroke-dashoffset", len)
+      .transition()
+      .delay(dDel)
+      .duration(dMs)
+      .ease(d3.easeCubicOut)
+      .attr("stroke-dashoffset", 0);
+  }
+
+  function animateAxisStrokeLines(axisG, stagger0) {
+    let k = 0;
+    const s0 = stagger0 == null ? 0 : stagger0;
+    axisG.selectAll(".domain").each(function () {
+      revealStrokeLine(d3.select(this), 680, s0 + k * 45);
+      k++;
+    });
+    axisG.selectAll(".tick line").each(function () {
+      revealStrokeLine(d3.select(this), 480, s0 + k * 18);
+      k++;
+    });
+  }
+
+  function fadeAxisTexts(axisG, baseDelay) {
+    const t0 = baseDelay == null ? 200 : baseDelay;
+    axisG.selectAll("text").attr("opacity", 0)
+      .transition()
+      .delay((_, i) => t0 + i * 12)
+      .duration(380)
+      .ease(d3.easeCubicOut)
+      .attr("opacity", 1);
+  }
+
+  function safeHex(c) {
+    const s = String(c || "");
+    return /^#[0-9A-Fa-f]{6}$/.test(s) ? s : "#888888";
+  }
+
+  /** 柱状/条带用横向光泽渐变（objectBoundingBox） */
+  function chartBarGradientUrl(defs, uniqueId, hex) {
+    const base = safeHex(hex);
+    const id = "bgrad_" + String(uniqueId).replace(/\W/g, "_");
+    const gg = defs.append("linearGradient")
+      .attr("id", id)
+      .attr("gradientUnits", "objectBoundingBox")
+      .attr("x1", "0%").attr("y1", "50%").attr("x2", "100%").attr("y2", "50%");
+    let c0, c1, c2;
+    try {
+      const C = d3.color(base);
+      if (C) {
+        c0 = C.copy({ r: C.r * 0.42, g: C.g * 0.42, b: C.b * 0.42 }).formatHex();
+        c1 = C.brighter(0.65).formatHex();
+        c2 = C.formatHex();
+      } else throw new Error("x");
+    } catch (e1) {
+      c0 = "#1a1a22";
+      c1 = base;
+      c2 = base;
+    }
+    gg.append("stop").attr("offset", "0%").attr("stop-color", c0);
+    gg.append("stop").attr("offset", "42%").attr("stop-color", c1);
+    gg.append("stop").attr("offset", "100%").attr("stop-color", c2);
+    return "url(#" + id + ")";
+  }
+
+  function gridMidpointsBetween(arr) {
+    const out = [];
+    for (let i = 0; i < arr.length; i++) {
+      out.push(arr[i]);
+      if (i < arr.length - 1) out.push((arr[i] + arr[i + 1]) / 2);
+    }
+    return out;
+  }
+
+  function gridDenseBetween(arr) {
+    return gridMidpointsBetween(gridMidpointsBetween(arr));
+  }
+
+  function pixelRevealCaptionPlainText(el, text, delayOffset) {
+    if (!el) return;
+    const off = delayOffset == null ? 0 : delayOffset;
+    el.textContent = "";
+    const lines = String(text).split("\n");
+    let idx = 0;
+    lines.forEach(function (line, li) {
+      if (li) el.appendChild(document.createElement("br"));
+      for (let ci = 0; ci < line.length; ci++) {
+        const ch = line[ci];
+        const s = document.createElement("span");
+        s.className = "pixel-reveal-char pixel-reveal-char--cap";
+        s.textContent = ch === " " ? "\u00A0" : ch;
+        s.style.animationDelay = (off + idx * PIX_CAP_STAGGER) + "s";
+        idx++;
+        el.appendChild(s);
+      }
+    });
+  }
+
+  function figCapAppendChrome(win) {
+    const chrome = document.createElement("div");
+    chrome.className = "fig-cap-chrome";
+    chrome.setAttribute("aria-hidden", "true");
+    chrome.innerHTML =
+      '<span class="fig-cap-win-btn fig-cap-win-btn--back">←</span>' +
+      '<span class="fig-cap-win-btn fig-cap-win-btn--heart">♥</span>' +
+      '<span class="fig-cap-win-btn fig-cap-win-btn--refresh">↻</span>' +
+      '<span class="fig-cap-win-btn fig-cap-win-btn--close">×</span>';
+    win.appendChild(chrome);
+  }
+
+  function setFigCaption(container, text) {
+    if (!container || !container.closest) return;
+    const row = container.closest(".chart-row");
+    if (!row) return;
+    const cap = row.querySelector(".chart-figure-caption");
+    if (cap) {
+      cap.innerHTML = "";
+      if (text) {
+        const win = document.createElement("div");
+        win.className = "fig-cap-window";
+        figCapAppendChrome(win);
+        const body = document.createElement("div");
+        body.className = "fig-cap-body";
+        const p = document.createElement("p");
+        p.className = "fig-cap-foot";
+        p.style.borderTop = "none";
+        p.style.marginTop = "0";
+        p.style.paddingTop = "0";
+        p.textContent = text;
+        body.appendChild(p);
+        win.appendChild(body);
+        cap.appendChild(win);
+        requestAnimationFrame(function () {
+          const t = text;
+          p.textContent = "";
+          pixelRevealCaptionPlainText(p, t, 0);
+        });
+      }
+    }
+  }
+
+  /** 右侧图注：图一风白窗 + 色块说明 */
+  function setFigCaptionLegend(container, items, footnote) {
+    if (!container || !container.closest) return;
+    const row = container.closest(".chart-row");
+    if (!row) return;
+    const cap = row.querySelector(".chart-figure-caption");
+    if (!cap) return;
+    cap.innerHTML = "";
+    const win = document.createElement("div");
+    win.className = "fig-cap-window";
+    figCapAppendChrome(win);
+    const body = document.createElement("div");
+    body.className = "fig-cap-body";
+    const leg = document.createElement("div");
+    leg.className = "fig-cap-legend";
+    (items || []).forEach(function (it) {
+      const r = document.createElement("div");
+      r.className = "fig-cap-row";
+      const sw = document.createElement("span");
+      sw.className = "fig-cap-swatch";
+      sw.style.background = safeHex(it.hex);
+      const lb = document.createElement("span");
+      lb.className = "fig-cap-label";
+      lb.textContent = it.text || "";
+      r.appendChild(sw);
+      r.appendChild(lb);
+      leg.appendChild(r);
+    });
+    body.appendChild(leg);
+    if (footnote) {
+      const ft = document.createElement("p");
+      ft.className = "fig-cap-foot";
+      ft.textContent = footnote;
+      body.appendChild(ft);
+    }
+    win.appendChild(body);
+    cap.appendChild(win);
+    requestAnimationFrame(function () {
+      const rowDelay = 0.0035;
+      cap.querySelectorAll(".fig-cap-label").forEach(function (lb, i) {
+        const t = lb.textContent;
+        if (!t || lb.querySelector(".pixel-reveal-char")) return;
+        lb.textContent = "";
+        pixelRevealCaptionPlainText(lb, t, i * rowDelay);
+      });
+      const ft = cap.querySelector(".fig-cap-foot");
+      if (ft && ft.textContent && !ft.querySelector(".pixel-reveal-char")) {
+        const tf = ft.textContent;
+        ft.textContent = "";
+        pixelRevealCaptionPlainText(ft, tf, (items || []).length * rowDelay + 0.006);
+      }
+    });
+  }
+
+  function captionSampleLine(rows) {
+    return "【数据范围】随顶栏筛选变化，本图当前有效样本 " + rows.length + " 条。";
+  }
+  const IMG_PLACEHOLDER = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+  const CHART_W = 2000;
+  const CHART_W_SNAP = 2304;
+  const chartBoxW = (el, cap) => {
+    const snap = el && el.closest(".chart-snap-page");
+    const maxW = cap != null ? cap : (snap ? CHART_W_SNAP : CHART_W);
+    const row = el && el.closest(".chart-row-main");
+    const rowW = row && row.clientWidth > 0 ? row.clientWidth : 0;
+    let raw = (el && el.clientWidth) || 0;
+    if (rowW > 0) raw = Math.min(raw > 0 ? raw : rowW, rowW);
+    else if (raw < 160) raw = Math.min((typeof innerWidth !== "undefined" ? innerWidth : 800) - 80, maxW);
+    return Math.min(Math.max(raw, 120), maxW);
+  };
+
+  /**
+   * 滚入视口：首次或无图时 draw；再次进入只重播 CSS，避免反复清空 DOM 导致卡顿、频闪。
+   * 滚出：仅当完全离开视口（!isIntersecting）才淡出，避免比例在阈值间抖动时误触发。
+   */
+  function attachChartOnView(panelEl, host, draw) {
+    if (!panelEl || !host) return;
+    host.innerHTML = "";
+    host.classList.remove("viz-chart-in");
+    delete host.dataset.vizRevealed;
+    var inView = false;
+    function hideChart() {
+      host.classList.remove("viz-chart-in");
+    }
+    function playEntrance(needFullDraw) {
+      host.classList.remove("viz-chart-in");
+      void host.offsetWidth;
+      if (needFullDraw) {
+        host.innerHTML = "";
+        delete host.dataset.vizRevealed;
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+          try {
+            draw(host);
+          } catch (err) {}
+          revealChartSvgTexts(host);
+          requestAnimationFrame(function () {
+            host.classList.add("viz-chart-in");
+            try {
+              host.dispatchEvent(new CustomEvent("chartvizinstart", { bubbles: true }));
+            } catch (e3) {}
+          });
+          });
+        });
+      } else {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            host.classList.add("viz-chart-in");
+            try {
+              host.dispatchEvent(new CustomEvent("chartvizinstart", { bubbles: true }));
+            } catch (e4) {}
+          });
+        });
+      }
+    }
+    try {
+      var io = new IntersectionObserver(
+        function (ents) {
+          ents.forEach(function (e) {
+            var r = e.intersectionRatio;
+            var show = e.isIntersecting && r >= 0.14;
+            if (show && !inView) {
+              inView = true;
+              playEntrance(!host.querySelector(".chart-svg"));
+            } else if (!e.isIntersecting && inView) {
+              inView = false;
+              hideChart();
+            }
+          });
+        },
+        { root: null, threshold: [0, 0.08, 0.14, 0.35, 0.65, 1], rootMargin: "0px 0px -6% 0px" }
+      );
+      io.observe(panelEl);
+    } catch (err) {
+      playEntrance(true);
+    }
+  }
+
+  let ALL = [];
+  const filters = Object.fromEntries(FILTER_KEYS.map(k => [k, null]));
+  let textBin = null;
+
+  function norm(s) { return String(s == null ? "" : s).trim(); }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"); }
+
+  /** 将纯文本拆成逐字 span，带像素风模糊→清晰动画 */
+  function pixelRevealPlainText(el, text, delayOffset) {
+    if (!el) return;
+    const off = delayOffset == null ? 0 : delayOffset;
+    el.textContent = "";
+    const lines = String(text).split("\n");
+    let idx = 0;
+    lines.forEach((line, li) => {
+      if (li) el.appendChild(document.createElement("br"));
+      for (const ch of line) {
+        const s = document.createElement("span");
+        s.className = "pixel-reveal-char";
+        s.textContent = ch === " " ? "\u00A0" : ch;
+        s.style.animationDelay = (off + idx * PIX_CHAR_STAGGER) + "s";
+        idx++;
+        el.appendChild(s);
+      }
+    });
+  }
+
+  /** SVG <text> 内逐字 tspan 显现（图表轴标签、图内说明等） */
+  function pixelRevealSvgText(el, delayOffset) {
+    if (!el || el.localName !== "text") return;
+    if (el.querySelector("tspan.pixel-reveal-char")) return;
+    const line = String(el.textContent || "").replace(/\n/g, " ");
+    if (!line.trim()) return;
+    el.textContent = "";
+    const off = delayOffset == null ? 0 : delayOffset;
+    let idx = 0;
+    for (const ch of line) {
+      const ts = document.createElementNS(SVG_NS, "tspan");
+      ts.setAttribute("class", "pixel-reveal-char");
+      ts.textContent = ch === " " ? "\u00A0" : ch;
+      ts.style.animationDelay = (off + idx * PIX_CHAR_STAGGER) + "s";
+      el.appendChild(ts);
+      idx++;
+    }
+  }
+
+  function revealChartSvgTexts(host) {
+  if (!host) return;
+    var texts = host.querySelectorAll(".chart-svg text");
+    var ni = 0;
+    texts.forEach(function (tel) {
+      if (tel.closest("g.bee-thumb")) return;
+      var raw = (tel.textContent || "").trim();
+      if (!raw) return;
+      pixelRevealSvgText(tel, ni * 0.025);
+      ni++;
+    });
+  }
+
+  function pixelRevealElementText(el) {
+    if (!el) return;
+    const t = el.textContent;
+    if (!t) return;
+    pixelRevealPlainText(el, t, 0);
+  }
+  function thumb(r) {
+    const u = norm(r[F.图片]);
+    if (u && (u.startsWith("http") || u.startsWith("data:"))) return u;
+    if (u) return u;
+    const fn = norm(r[F.文件名]);
+    return fn ? "meme-img/" + fn.split("/").map(encodeURIComponent).join("/") : "";
+  }
+
+  function matchRow(r, omit) {
+    for (const k of FILTER_KEYS) {
+      if (k === omit) continue;
+      const f = filters[k];
+      if (f == null) continue;
+      if (k === F.图片 && f === "__HAS_URL__") {
+        if (!norm(r[F.图片])) return false;
+        continue;
+      }
+      if (norm(r[k]) !== norm(f)) return false;
+    }
+    if (omit !== "__bin__" && textBin) {
+      const n = +r[F.字数];
+      if (isNaN(n) || n < textBin[0] || n >= textBin[1]) return false;
+    }
+    return true;
+  }
+  function rowsExact() { return ALL.filter(r => matchRow(r, null)); }
+  function rowsMarg(omit) {
+    if (omit === F.字数) return ALL.filter(r => matchRow(r, "__bin__"));
+    return ALL.filter(r => matchRow(r, omit));
+  }
+
+  function bumpViz() {
+    const a = document.querySelector(".app");
+    if (!a) return;
+    a.classList.remove("viz-bump");
+    void a.offsetWidth;
+    a.classList.add("viz-bump");
+  }
+
+  function setFilter(k, v) {
+    const t = norm(v);
+    if (filters[k] === t) filters[k] = null;
+    else filters[k] = t;
+    bumpViz();
+    render();
+  }
+  function setPhase(v) {
+    filters[F.阶段] = v ? norm(v) : null;
+    bumpViz();
+    render();
+  }
+  function clearFilters() {
+    FILTER_KEYS.forEach(k => { filters[k] = null; });
+    textBin = null;
+    bumpViz();
+    render();
+  }
+  function setTextBin(lo, hi) {
+    const same = textBin && textBin[0] === lo && textBin[1] === hi;
+    textBin = same ? null : [lo, hi];
+    bumpViz();
+    render();
+  }
+
+  function aggregate(rows, key) {
+    const m = new Map();
+    for (const r of rows) {
+      let v = r[key];
+      if (key === F.字数) v = String(v);
+      else v = norm(v) || "（空）";
+      m.set(v, (m.get(v) || 0) + 1);
+    }
+    return [...m].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count);
+  }
+
+  const tipEl = document.getElementById("tip");
+  function tipShow(ev, html) {
+    tipEl.innerHTML = html;
+    tipEl.classList.add("on");
+    moveTip(ev);
+  }
+  function moveTip(ev) {
+    let x = ev.clientX + 14, y = ev.clientY + 14;
+    if (x + 300 > innerWidth) x = ev.clientX - 300;
+    if (y + 120 > innerHeight) y = ev.clientY - 130;
+    tipEl.style.left = x + "px";
+    tipEl.style.top = y + "px";
+  }
+  function tipHide() { tipEl.classList.remove("on"); }
+
+  function renderFiltersBar() {
+    const host = document.getElementById("filters-bar");
+    host.innerHTML = "";
+    const parts = [];
+    FILTER_KEYS.forEach(k => {
+      if (filters[k] != null) {
+        let d = filters[k];
+        if (k === F.图片 && d === "__HAS_URL__") d = "有图片链接";
+        parts.push(`${k}: ${d}`);
+      }
+    });
+    if (textBin) parts.push(`字数区间: [${textBin[0]}, ${textBin[1]})`);
+    if (!parts.length) {
+      const s = document.createElement("span");
+      s.className = "chip dim";
+      s.textContent = "当前无筛选条件";
+      host.appendChild(s);
+    } else {
+      parts.forEach(p => {
+        const s = document.createElement("span");
+        s.className = "chip";
+        s.textContent = p;
+        host.appendChild(s);
+      });
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ghost";
+      b.textContent = "清除全部";
+      b.onclick = clearFilters;
+      host.appendChild(b);
+    }
+    requestAnimationFrame(function () {
+      host.querySelectorAll(".chip, button.ghost").forEach(function (el) {
+        const t = el.textContent;
+        el.textContent = "";
+        pixelRevealPlainText(el, t, 0);
+      });
+    });
+  }
+
+  function renderPhases() {
+    const host = document.getElementById("phases");
+    host.innerHTML = "";
+    const rows = rowsMarg(F.阶段);
+    const cur = filters[F.阶段];
+    const PHASE_STRIP = [
+      { label: "贴吧早期（全部）", key: null, isAll: true },
+      { label: "早期原型期（阶段一）", key: "早期原型期", isAll: false },
+      { label: "熊猫头形成期（阶段二）", key: "熊猫头形成期", isAll: false },
+      { label: "泛化扩散期（阶段三）", key: "泛化扩散期", isAll: false }
+    ];
+
+    function block(entry, samples, count) {
+      const isAll = entry.isAll;
+      const label = entry.key;
+      const on = isAll ? !cur : norm(cur) === norm(label);
+      const div = document.createElement("div");
+      div.className = "phase-block phase-block--strip" + (on ? " on" : "");
+      div.innerHTML = "<h3>" + esc(entry.label) + "</h3><div class='meta'>" + count + " 条</div>";
+      const thumbs = document.createElement("div");
+      thumbs.className = "phase-thumbs phase-thumbs--strip";
+      samples.filter(s => thumb(s)).slice(0, 24).forEach(s => {
+        const img = document.createElement("img");
+        img.src = thumb(s);
+        img.alt = "";
+        img.addEventListener("mouseenter", ev => {
+          const memo = norm(s[F.备注]) || "（无备注）";
+          tipShow(ev, `<img src="${esc(thumb(s))}" alt="">` + esc(memo));
+        });
+        img.addEventListener("mousemove", moveTip);
+        img.addEventListener("mouseleave", tipHide);
+        thumbs.appendChild(img);
+      });
+      div.appendChild(thumbs);
+      div.addEventListener("click", () => setPhase(isAll ? null : label));
+      host.appendChild(div);
+    }
+
+    PHASE_STRIP.forEach(entry => {
+      if (entry.isAll) {
+        block(entry, rows, rows.length);
+        return;
+      }
+      const samples = rows.filter(r => norm(r[F.阶段]) === norm(entry.key));
+      block(entry, samples, samples.length);
+    });
+    requestAnimationFrame(function () {
+      document.querySelectorAll("#phases .phase-block h3").forEach(function (h, i) {
+        const t = h.textContent;
+        h.textContent = "";
+        pixelRevealPlainText(h, t, i * 0.014);
+      });
+      document.querySelectorAll("#phases .phase-block .meta").forEach(function (m, i) {
+        const t = m.textContent;
+        m.textContent = "";
+        pixelRevealPlainText(m, t, 0.04 + i * 0.014);
+      });
+    });
+  }
+
+  const PHASE_ORDER = ["早期原型期", "熊猫头形成期", "泛化扩散期"];
+  function sortPhases(agg) {
+    return [...agg].sort((a, b) => {
+      const ia = PHASE_ORDER.indexOf(norm(a.key)), ib = PHASE_ORDER.indexOf(norm(b.key));
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
+  }
+  function seed01(i) { return ((i * 1103515245 + 12345) >>> 0) / 4294967296; }
+  function colorByBW(key) {
+    const s = String(key);
+    if (s.indexOf("彩") >= 0) return PAL[3];
+    if (s.indexOf("黑白") >= 0) return PAL[1];
+    return PAL[0];
+  }
+  function whenChartVisible(host, drawAnim) {
+    const io = new IntersectionObserver((ents) => {
+      ents.forEach(e => {
+        if (e.isIntersecting) {
+          drawAnim();
+          io.disconnect();
+        }
+      });
+    }, { root: null, rootMargin: "0px 0px -5% 0px", threshold: 0.08 });
+    io.observe(host);
+    setTimeout(drawAnim, 1800);
+  }
+
+  function bindChartRevealForPanel(panelEl, host) {
+    if (!panelEl || !host) return;
+    host.classList.remove("viz-chart-in");
+    delete host.dataset.vizRevealed;
+    var reveal = function () {
+      if (host.dataset.vizRevealed === "1") return;
+      host.dataset.vizRevealed = "1";
+      requestAnimationFrame(function () {
+        host.classList.add("viz-chart-in");
+      });
+    };
+    try {
+      var io = new IntersectionObserver(function (ents) {
+        ents.forEach(function (e) {
+          if (e.isIntersecting) {
+            reveal();
+            io.disconnect();
+          }
+        });
+      }, { root: null, threshold: 0.01, rootMargin: "100px 0px 100px 0px" });
+      io.observe(panelEl);
+    } catch (err) {
+      setTimeout(reveal, 200);
+    }
+    requestAnimationFrame(function () {
+      var rect = panelEl.getBoundingClientRect();
+      var vh = window.innerHeight || document.documentElement.clientHeight || 800;
+      if (rect.bottom > -40 && rect.top < vh + 40) reveal();
+    });
+    setTimeout(reveal, 500);
+  }
+
+  function chartBeeswarmProto(container, rows) {
+    const agg = aggregate(rows, F.原型).slice(0, 8);
+    if (!agg.length) return;
+    const w = chartBoxW(container);
+    const labelW = 168;
+    const topPad = 28;
+    const axisPad = 44;
+    const rowH = 70;
+    const axisY = topPad + agg.length * rowH + 10;
+    const h = axisY + axisPad;
+    const xPad = labelW + 32;
+    const plotW = Math.max(80, w - xPad - 20);
+    const xScale = d3.scaleLinear().domain([1, 5]).range([xPad, xPad + plotW]);
+    const svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    const gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    let gDelay = 0;
+    d3.range(1, 5.001, 0.25).forEach(function (step) {
+      const ln = gridG.append("line")
+        .attr("x1", xScale(step)).attr("x2", xScale(step)).attr("y1", topPad).attr("y2", axisY)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 580, gDelay);
+      gDelay += 8;
+    });
+    agg.forEach(function (cat, ri) {
+      const yy = topPad + ri * rowH;
+      const ln = gridG.append("line")
+        .attr("x1", xPad).attr("x2", xPad + plotW).attr("y1", yy).attr("y2", yy)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 580, gDelay);
+      gDelay += 14;
+    });
+    agg.forEach(function (cat, ri) {
+      const yy = topPad + ri * rowH + rowH / 2;
+      const ln = gridG.append("line")
+        .attr("x1", xPad).attr("x2", xPad + plotW).attr("y1", yy).attr("y2", yy)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 560, gDelay);
+      gDelay += 12;
+    });
+    agg.forEach(function (cat, ri) {
+      const yy = topPad + ri * rowH;
+      [0.25, 0.75].forEach(function (frac) {
+        const yl = yy + rowH * frac;
+        const ln = gridG.append("line")
+          .attr("x1", xPad).attr("x2", xPad + plotW).attr("y1", yl).attr("y2", yl)
+          .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+        revealStrokeLine(ln, 520, gDelay);
+        gDelay += 8;
+      });
+    });
+    const lnB = gridG.append("line")
+      .attr("x1", xPad).attr("x2", xPad + plotW).attr("y1", axisY).attr("y2", axisY)
+      .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+    revealStrokeLine(lnB, 620, gDelay);
+    gDelay += 30;
+    const spine = svg.append("line").attr("x1", xPad - 12).attr("x2", xPad - 12).attr("y1", topPad - 4).attr("y2", axisY - 2)
+      .attr("stroke", "rgba(255,255,255,0.4)").attr("stroke-width", 0.65);
+    revealStrokeLine(d3.select(spine.node()), 700, gDelay);
+    gDelay += 40;
+    agg.forEach((cat, ri) => {
+      const yy = topPad + ri * rowH;
+      const sub = rows.filter(r => norm(r[F.原型]) === norm(cat.key));
+      svg.append("text").attr("x", labelW - 6).attr("y", yy + rowH / 2 + 4).attr("text-anchor", "end")
+        .attr("fill", "#ddd").style("font-size", "11px")
+        .text(String(cat.key).length > 8 ? String(cat.key).slice(0, 7) + "…" : cat.key);
+      sub.forEach((r, j) => {
+        const pack = +r[F.包装];
+        const px = isNaN(pack) ? 3 : Math.min(5, Math.max(1, pack));
+        const jitter = (seed01(j + ri * 997) - 0.5) * (plotW / 20);
+        const jy = (seed01(j * 7919 + ri) - 0.5) * 14;
+        const cx = xScale(px) + jitter;
+        const cy = yy + rowH / 2 + jy;
+        const col = colorByBW(r[F.黑白彩色]);
+        const href = thumb(r) || IMG_PLACEHOLDER;
+        const half = 9;
+        const g = svg.append("g").attr("class", "bee-thumb")
+          .attr("data-cx", cx).attr("data-cy", cy)
+          .attr("transform", "translate(" + cx + "," + cy + ") scale(0)")
+          .style("cursor", "pointer")
+          .on("click", () => { setFilter(F.原型, cat.key); })
+          .on("mouseenter", function (ev) {
+            const t = d3.select(this);
+            t.interrupt();
+            const x = +t.attr("data-cx"), y = +t.attr("data-cy");
+            t.transition().duration(180).attr("transform", "translate(" + x + "," + y + ") scale(2.05)");
+            tipShow(ev, (href !== IMG_PLACEHOLDER ? `<img src="${esc(href)}" alt="">` : "") + esc(norm(r[F.备注]) || cat.key));
+          })
+          .on("mousemove", moveTip)
+          .on("mouseleave", function () {
+            const t = d3.select(this);
+            t.interrupt();
+            const x = +t.attr("data-cx"), y = +t.attr("data-cy");
+            t.transition().duration(160).attr("transform", "translate(" + x + "," + y + ") scale(1)");
+            tipHide();
+          });
+        g.append("rect").attr("x", -half - 1).attr("y", -half - 1).attr("width", half * 2 + 2).attr("height", half * 2 + 2)
+          .attr("fill", "rgba(0,0,0,0.35)").attr("stroke", col).attr("stroke-width", 2);
+        g.append("image")
+          .attr("href", href)
+          .attr("x", -half).attr("y", -half).attr("width", half * 2).attr("height", half * 2)
+          .attr("preserveAspectRatio", "xMidYMid slice");
+        g.transition().delay(j * 12).duration(320).ease(d3.easeElasticOut)
+          .attr("transform", "translate(" + cx + "," + cy + ") scale(1)");
+      });
+    });
+    const xAx = svg.append("g").attr("transform", "translate(0," + axisY + ")")
+      .call(d3.axisBottom(xScale).ticks(5).tickFormat(d3.format("d")))
+      .call(g => g.select(".domain").attr("stroke", CHART_AXIS_DOMAIN_STROKE).attr("stroke-width", 1.6))
+      .call(g => g.selectAll(".tick line").attr("stroke", CHART_AXIS_TICK_STROKE).attr("stroke-width", CHART_AXIS_TICK_W));
+    xAx.selectAll("text").attr("fill", "#ccc").style("font-size", "11px").attr("opacity", 0)
+      .transition().delay(gDelay + 80).duration(400).attr("opacity", 1);
+    animateAxisStrokeLines(xAx, gDelay);
+    svg.append("text").attr("x", xPad + plotW / 2).attr("y", h - 6).attr("text-anchor", "middle").attr("fill", "#ddd").style("font-size", "12px").style("font-weight", "700")
+      .attr("opacity", 0)
+      .text("横轴：情绪包装度（编码 1 = 弱包装 → 5 = 强包装）")
+      .transition().delay(gDelay + 200).duration(450).attr("opacity", 1);
+    setFigCaptionLegend(
+      container,
+      [
+        { hex: PAL[1], text: "黑白：外框为青色" },
+        { hex: PAL[3], text: "彩色：外框为黄色" },
+        { hex: PAL[0], text: "其它：外框为粉洋红" }
+      ],
+      "【纵轴】左侧每行一个人物原型；点横位置=该条目的情绪包装度（1–5）。悬停可放大缩略图。\n" + captionSampleLine(rows)
+    );
+  }
+
+  function chartSplinePhases(container, rows) {
+    const agg = sortPhases(aggregate(rows, F.阶段));
+    if (!agg.length) return;
+    const w = chartBoxW(container);
+    const margin = { t: 32, r: 28, b: 58, l: 52 };
+    const iw = w - margin.l - margin.r;
+    const ih = 340;
+    const h = margin.t + ih + margin.b;
+    const max = d3.max(agg, d => d.count) || 1;
+    const x = d3.scalePoint().domain(agg.map(d => d.key)).range([margin.l, margin.l + iw]).padding(0.5);
+    const y = d3.scaleLinear().domain([0, max]).nice().range([margin.t + ih, margin.t]);
+    const svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    const gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    let gds = 0;
+    const yTicksF = y.ticks(6).filter(function (yt) {
+      return yt >= y.domain()[0] && yt <= y.domain()[1];
+    });
+    gridDenseBetween(yTicksF).forEach(function (yt) {
+      const yy = y(yt);
+      if (yy < margin.t - 1 || yy > margin.t + ih + 1) return;
+      const ln = gridG.append("line")
+        .attr("x1", margin.l).attr("x2", margin.l + iw).attr("y1", yy).attr("y2", yy)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 560, gds);
+      gds += 6;
+    });
+    agg.forEach(function (d) {
+      const xi = x(d.key);
+      const ln = gridG.append("line")
+        .attr("x1", xi).attr("x2", xi).attr("y1", margin.t).attr("y2", margin.t + ih)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 600, gds);
+      gds += 14;
+    });
+    for (let i2 = 0; i2 < agg.length - 1; i2++) {
+      const xL = x(agg[i2].key), xR = x(agg[i2 + 1].key);
+      const xm = (xL + xR) / 2;
+      [(xL + xm) / 2, xm, (xm + xR) / 2].forEach(function (xv) {
+        const ln = gridG.append("line")
+          .attr("x1", xv).attr("x2", xv).attr("y1", margin.t).attr("y2", margin.t + ih)
+          .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+        revealStrokeLine(ln, 520, gds);
+        gds += 10;
+      });
+    }
+    const yAxisG = svg.append("g").attr("transform", "translate(" + margin.l + ",0)")
+      .call(d3.axisLeft(y).ticks(5).tickFormat(d3.format("d")))
+      .call(g => g.select(".domain").attr("stroke", CHART_AXIS_DOMAIN_STROKE).attr("stroke-width", 1.6))
+      .call(g => g.selectAll(".tick line").attr("stroke", CHART_AXIS_TICK_STROKE).attr("stroke-width", CHART_AXIS_TICK_W));
+    yAxisG.selectAll("text").attr("fill", "#ccc").style("font-size", "10px").attr("opacity", 0)
+      .transition().delay(gds + 60).duration(380).attr("opacity", 1);
+    animateAxisStrokeLines(yAxisG, gds);
+    svg.append("text").attr("transform", "translate(16," + (margin.t + ih / 2) + ") rotate(-90)").attr("text-anchor", "middle")
+      .attr("fill", "#ddd").style("font-size", "11px").style("font-weight", "700").attr("opacity", 0).text("纵轴：条数（张）")
+      .transition().delay(gds + 120).duration(400).attr("opacity", 1);
+    const pts = agg.map(d => [x(d.key), y(d.count)]);
+    if (pts.length >= 2) {
+      const line = d3.line().curve(d3.curveMonotoneX);
+      const pathD = line(pts);
+      const path = svg.append("path").attr("class", "anim-spline").attr("fill", "none").attr("stroke", PAL[0]).attr("stroke-width", 4)
+        .attr("stroke-linecap", "square").attr("stroke-linejoin", "miter").attr("d", pathD)
+        .style("cursor", "pointer")
+        .on("mouseenter", function () {
+          d3.select(this).interrupt().transition().duration(140).attr("stroke-width", 6.5);
+        })
+        .on("mouseleave", function () {
+          d3.select(this).interrupt().transition().duration(140).attr("stroke-width", 4);
+        });
+      whenChartVisible(container, () => {
+        try {
+          const len = path.node().getTotalLength();
+          path.attr("stroke-dasharray", len).attr("stroke-dashoffset", len)
+            .transition().duration(1100).ease(d3.easeCubicOut).attr("stroke-dashoffset", 0);
+        } catch (er) { path.attr("stroke-dasharray", null).attr("stroke-dashoffset", null); }
+      });
+    }
+    const axisY = margin.t + ih;
+    agg.forEach((d, i) => {
+      const xi = x(d.key), yi = y(d.count), y0 = axisY;
+      svg.append("line").attr("x1", xi).attr("x2", xi).attr("y1", y0).attr("y2", y0)
+        .attr("stroke", "#555").attr("stroke-width", 2).attr("stroke-dasharray", "3 3")
+        .transition().delay(400 + i * 80).duration(350).attr("y2", yi);
+      svg.append("circle").attr("cx", xi).attr("cy", yi).attr("r", 0)
+        .attr("fill", "#fff").attr("stroke", PAL[1]).attr("stroke-width", 3)
+        .style("cursor", "pointer")
+        .on("click", () => setPhase(d.key))
+        .on("mouseenter", function (ev) {
+          d3.select(this).interrupt().transition().duration(160).attr("r", 11).attr("stroke-width", 4);
+          const lab = String(d.key).length > 12 ? String(d.key).slice(0, 11) + "…" : String(d.key);
+          tipShow(ev, esc(lab) + "<br>" + d.count + " 张（点击按阶段筛选）");
+        })
+        .on("mousemove", moveTip)
+        .on("mouseleave", function () {
+          d3.select(this).interrupt().transition().duration(160).attr("r", 8).attr("stroke-width", 3);
+          tipHide();
+        })
+        .transition().delay(500 + i * 80).duration(400).ease(d3.easeElasticOut).attr("r", 8);
+      svg.append("text").attr("x", xi).attr("y", y0 + 22).attr("text-anchor", "middle")
+        .attr("fill", "#888").style("font-size", "11px").attr("opacity", 0)
+        .text(String(d.key).length > 8 ? String(d.key).slice(0, 7) + "…" : d.key)
+        .transition().delay(gds + 140 + i * 40).duration(350).attr("opacity", 1);
+      svg.append("text").attr("x", xi).attr("y", yi - 14).attr("text-anchor", "middle")
+        .attr("fill", PAL[3]).style("font-size", "12px").text(d.count);
+    });
+    const xAx = svg.append("g").attr("transform", "translate(0," + axisY + ")")
+      .call(d3.axisBottom(x))
+      .call(g => g.select(".domain").attr("stroke", CHART_AXIS_DOMAIN_STROKE).attr("stroke-width", 1.6))
+      .call(g => g.selectAll(".tick line").attr("stroke", CHART_AXIS_TICK_STROKE).attr("stroke-width", CHART_AXIS_TICK_W));
+    xAx.selectAll("text").attr("fill", "#ccc").style("font-size", "11px").attr("opacity", 0)
+      .transition().delay(gds + 200).duration(400).attr("opacity", 1);
+    animateAxisStrokeLines(xAx, gds + 80);
+    svg.append("text").attr("x", margin.l + iw / 2).attr("y", h - 8).attr("text-anchor", "middle").attr("fill", "#ddd").style("font-size", "11px").style("font-weight", "700")
+      .attr("opacity", 0).text("横轴：传播阶段（类别）")
+      .transition().delay(gds + 260).duration(450).attr("opacity", 1);
+    setFigCaptionLegend(
+      container,
+      [
+        { hex: PAL[0], text: "粉洋红折线：各阶段条数连线" },
+        { hex: PAL[3], text: "黄色数字：该阶段在筛选下的条数" },
+        { hex: PAL[1], text: "青边白心节点：点击按阶段筛选" }
+      ],
+      "【纵轴】条数（张），与左侧刻度一致。【横轴】阶段名称见各点下方。\n" + captionSampleLine(rows)
+    );
+  }
+
+  function chartHBarPercentLegend(container, key, rows) {
+    const agg = aggregate(rows, key).slice(0, 7);
+    if (!agg.length) return;
+    const w = chartBoxW(container);
+    const labelW = 140;
+    const barLeft = labelW + 8;
+    const barW = Math.max(40, w - barLeft - 72);
+    const rowH = 84;
+    const barH = 28;
+    const plotTop = 44;
+    const h = plotTop + 12 + agg.length * rowH + 36;
+    const max = d3.max(agg, d => d.count) || 1;
+    const svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    const defsH = svg.append("defs");
+    const x0 = barLeft;
+    const x100 = barLeft + barW;
+    const gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    let gh = 0;
+    const gridY1 = plotTop;
+    const gridY2 = h - 14;
+    d3.range(0, 1.0001, 0.025).forEach(function (t) {
+      const gx = x0 + t * barW;
+      const ln = gridG.append("line").attr("x1", gx).attr("x2", gx).attr("y1", gridY1).attr("y2", gridY2)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 520, gh);
+      gh += 14;
+    });
+    const rowYTicks = d3.range(0, agg.length + 1).map(function (j) { return plotTop + j * rowH; });
+    gridDenseBetween(rowYTicks).forEach(function (gy) {
+      const ln = gridG.append("line").attr("x1", x0).attr("x2", x100).attr("y1", gy).attr("y2", gy)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 520, gh);
+      gh += 12;
+    });
+    svg.append("text").attr("x", barLeft + barW / 2).attr("y", 12).attr("text-anchor", "middle").attr("fill", "#ddd").style("font-size", "11px").style("font-weight", "700")
+      .attr("opacity", 0).text("横轴：条数相对比例（最长条=100%，细格约每 2.5%）")
+      .transition().delay(gh + 40).duration(400).attr("opacity", 1);
+    svg.append("text").attr("x", 8).attr("y", 30).attr("fill", "#ccc").style("font-size", "10px").style("font-weight", "700")
+      .attr("opacity", 0).text("纵轴：早期典型传播平台（每行一类）")
+      .transition().delay(gh + 60).duration(400).attr("opacity", 1);
+    d3.range(0, 1.0001, 0.25).forEach(function (t, ti) {
+      const gx = x0 + t * barW;
+      svg.append("text").attr("x", gx).attr("y", plotTop - 6).attr("text-anchor", "middle").attr("fill", "#888").style("font-size", "9px")
+        .attr("opacity", 0).text(Math.round(t * 100) + "%")
+        .transition().delay(gh + 80 + ti * 40).duration(320).attr("opacity", 1);
+    });
+    const sum = d3.sum(agg, x => x.count) || 1;
+    const tBase = gh + 160;
+    agg.forEach((d, i) => {
+      const yy = plotTop + i * rowH + Math.floor((rowH - barH) / 2);
+      const bw = (d.count / max) * barW;
+      const pctRow = Math.round(d.count / sum * 100);
+      let short = String(d.key);
+      if (short.length > 10) short = short.slice(0, 9) + "…";
+      svg.append("text").attr("x", labelW).attr("y", yy + barH / 2 + 4).attr("text-anchor", "end").attr("fill", "#bbb").style("font-size", "10px")
+        .attr("opacity", 0).text(short)
+        .transition().delay(tBase + i * 70).duration(350).attr("opacity", 1);
+      const fw = Math.max(4, bw);
+      const fillG = chartBarGradientUrl(defsH, "hb_" + i + "_" + String(d.key).slice(0, 12), PAL[i % 4]);
+      svg.append("rect").attr("x", x0).attr("y", yy).attr("width", 0).attr("height", barH)
+        .attr("fill", fillG).attr("stroke", "rgba(255,255,255,0.55)").attr("stroke-width", 2)
+        .style("cursor", "pointer")
+        .on("click", () => setFilter(key, d.key))
+        .on("mouseenter", function (ev) {
+          d3.select(this).interrupt().transition().duration(120).attr("opacity", 1).attr("stroke-width", 3);
+          tipShow(ev, esc(short) + "<br>" + d.count + " 张 · 占本图 " + pctRow + "%");
+        })
+        .on("mousemove", moveTip)
+        .on("mouseleave", function () {
+          d3.select(this).interrupt().transition().duration(120).attr("opacity", 1).attr("stroke-width", 2);
+          tipHide();
+        })
+        .transition().duration(920).delay(tBase + 180 + i * 110).ease(d3.easeCubicOut).attr("width", fw);
+      const countLab = svg.append("text")
+        .attr("x", x0 + fw + 6)
+        .attr("y", yy + barH / 2 + 4)
+        .attr("fill", "#fff")
+        .attr("stroke", "rgba(255,255,255,0.38)").attr("stroke-width", 0.65).attr("stroke-dasharray", "3 3")
+        .style("opacity", 0)
+        .attr("text-anchor", "start")
+        .text(d.count + " 张");
+      countLab.transition().delay(tBase + 520 + i * 110).duration(380).style("opacity", 1);
+    });
+    const legItems = agg.map((d, i) => {
+      const pct = Math.round(d.count / sum * 100);
+      const name = String(d.key).length > 14 ? String(d.key).slice(0, 13) + "…" : String(d.key);
+      return { hex: PAL[i % 4], text: name + " · " + pct + "% · " + d.count + " 张" };
+    });
+    setFigCaptionLegend(
+      container,
+      legItems,
+      "每行色条=一种平台；横轴为相对比例（最长条=100%，细格约每 2.5%）。柱尾数字=条数。点击条可筛选。\n" + captionSampleLine(rows)
+    );
+  }
+
+  function chartRadialRingBars(container, key, rows) {
+    const agg = aggregate(rows, key).slice(0, 7);
+    if (!agg.length) return;
+    const w = chartBoxW(container);
+    const ringW = 16;
+    const gap = 5;
+    const total = d3.sum(agg, d => d.count) || 1;
+    const rOut0 = 38 + agg.length * (ringW + gap);
+    const h = Math.max(400, rOut0 * 2 + 100);
+    const cx = w / 2;
+    const cy = h / 2 + 8;
+    const svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    const defsR = svg.append("defs");
+    const gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    let gr = 0;
+    const ringRadii = d3.range(0, agg.length + 1).map(function (ri) {
+      return Math.max(4, rOut0 - ri * (ringW + gap));
+    });
+    gridDenseBetween(ringRadii).forEach(function (rr) {
+      const circ = gridG.append("circle").attr("cx", cx).attr("cy", cy).attr("r", rr)
+        .attr("fill", "none").attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealCircleStroke(d3.select(circ.node()), rr, 640, gr);
+      gr += 16;
+    });
+    d3.range(0, 32).forEach(function (ki) {
+      const ang = (ki / 32) * 2 * Math.PI - Math.PI / 2;
+      const ln = gridG.append("line")
+        .attr("x1", cx).attr("y1", cy).attr("x2", cx + Math.cos(ang) * rOut0).attr("y2", cy + Math.sin(ang) * rOut0)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 520, gr);
+      gr += 6;
+    });
+    const root = svg.append("g");
+    agg.forEach((d, i) => {
+      const ro = rOut0 - i * (ringW + gap);
+      const ri = ro - ringW;
+      const pct = d.count / total;
+      const arcBg = d3.arc().innerRadius(ri).outerRadius(ro).startAngle(0).endAngle(2 * Math.PI);
+      const sweep = Math.max(0.003, pct) * 2 * Math.PI;
+      const arcFg = d3.arc().innerRadius(ri).outerRadius(ro).startAngle(-Math.PI / 2).endAngle(-Math.PI / 2 + sweep);
+      const fillG = chartBarGradientUrl(defsR, "rrb_" + i, PAL[i % 4]);
+      root.append("path").attr("d", arcBg({})).attr("transform", "translate(" + cx + "," + cy + ")")
+        .attr("fill", PAL[i % 4]).attr("fill-opacity", 0.22).attr("stroke", "rgba(255,255,255,0.38)").attr("stroke-width", 1.5);
+      if (pct > 0.0001) {
+        root.append("path").attr("d", arcFg({})).attr("transform", "translate(" + cx + "," + cy + ")")
+          .attr("fill", fillG).attr("stroke", "#fff").attr("stroke-width", 2.5)
+          .style("cursor", "pointer")
+          .on("click", () => setFilter(key, d.key))
+          .on("mouseenter", function (ev) {
+            d3.select(this).interrupt().transition().duration(120).attr("stroke", "#fcfce5").attr("stroke-width", 4.5);
+            tipShow(ev, esc(String(d.key)) + "<br>" + d.count + " 张 · " + Math.round(pct * 100) + "%");
+          })
+          .on("mousemove", moveTip)
+          .on("mouseleave", function () {
+            d3.select(this).interrupt().transition().duration(160).attr("stroke", "#fff").attr("stroke-width", 2.5);
+            tipHide();
+          })
+          .attr("opacity", 0)
+          .transition().duration(600).delay(i * 90).attr("opacity", 1);
+      }
+    });
+    root.append("circle").attr("cx", cx).attr("cy", cy).attr("r", rOut0 - agg.length * (ringW + gap) - gap)
+      .attr("fill", "#080808").attr("stroke", PAL[3]).attr("stroke-width", 3);
+    const ringItems = agg.map((d, i) => {
+      const pct = Math.round(d.count / total * 100);
+      const name = String(d.key).length > 16 ? String(d.key).slice(0, 15) + "…" : String(d.key);
+      return { hex: PAL[i % 4], text: "第 " + (i + 1) + " 环（由内向外）· " + pct + "% · " + name + " · " + d.count + " 张" };
+    });
+    setFigCaptionLegend(
+      container,
+      ringItems,
+      "图心向内至外每条环对应一类动作；整圈细环为该色空心轨，彩色填充弧=占筛选样本比例。点击弧可筛选。\n" + captionSampleLine(rows)
+    );
+  }
+
+  function chartDonutCallouts(container, key, rows) {
+    const agg = aggregate(rows, key);
+    if (!agg.length) return;
+    const w = chartBoxW(container);
+    const h = 400;
+    const cx = w / 2;
+    const cy = h / 2 + 10;
+    const R = Math.min(w * 0.34, h * 0.38, 168);
+    const pie = d3.pie().value(d => d.count).sort(null);
+    const arc = d3.arc().innerRadius(R * 0.48).outerRadius(R);
+    const svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    const pieD = pie(agg);
+    const tot = d3.sum(agg, x => x.count) || 1;
+    const defsD = svg.append("defs");
+    const fillUrls = pieD.map((d, j) => chartBarGradientUrl(defsD, "don_" + j, PAL[j % 4]));
+    const gridRad = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    let grr = 0;
+    const radTicks = [0.5, 0.62, 0.74, 0.86, 0.98].map(function (tr) { return R * tr; });
+    gridDenseBetween(radTicks).forEach(function (rr) {
+      const circ = gridRad.append("circle").attr("cx", cx).attr("cy", cy).attr("r", Math.max(4, rr))
+        .attr("fill", "none").attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealCircleStroke(d3.select(circ.node()), Math.max(4, rr), 640, grr);
+      grr += 16;
+    });
+    pieD.forEach(function (d) {
+      const a = d.startAngle - Math.PI / 2;
+      const ln = gridRad.append("line")
+        .attr("x1", cx).attr("y1", cy)
+        .attr("x2", cx + Math.cos(a) * R * 1.02).attr("y2", cy + Math.sin(a) * R * 1.02)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 480, grr);
+      grr += 12;
+    });
+    pieD.forEach(function (d) {
+      const mid = (d.startAngle + d.endAngle) / 2 - Math.PI / 2;
+      const ln = gridRad.append("line")
+        .attr("x1", cx).attr("y1", cy)
+        .attr("x2", cx + Math.cos(mid) * R * 1.02).attr("y2", cy + Math.sin(mid) * R * 1.02)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 420, grr);
+      grr += 10;
+    });
+    svg.append("text").attr("x", cx).attr("y", 22).attr("text-anchor", "middle").attr("fill", "#ddd").style("font-size", "12px").style("font-weight", "700")
+      .attr("opacity", 0).text("扇区面积 ∝ 条数；细环与射线为读数辅助格")
+      .transition().delay(grr + 40).duration(400).attr("opacity", 1);
+    const g = svg.append("g").attr("transform", "translate(" + cx + "," + cy + ")");
+    const arcLab = d3.arc().innerRadius(R * 0.66).outerRadius(R * 0.66);
+    g.selectAll("path.slice").data(pieD).join("path").attr("class", "slice donut-slice-pix")
+      .attr("fill", (_, j) => fillUrls[j]).attr("stroke", "#050508").attr("stroke-width", 2)
+      .style("cursor", "pointer")
+      .on("click", (_, d) => setFilter(key, d.data.key))
+      .on("mouseenter", function (ev, d) {
+        d3.select(this).interrupt().transition().duration(120).attr("stroke", "#fcfce5").attr("stroke-width", 5.5);
+        const p = Math.round(d.data.count / tot * 100);
+        tipShow(ev, esc(String(d.data.key)) + "<br>" + d.data.count + " 张 · " + p + "%");
+      })
+      .on("mousemove", moveTip)
+      .on("mouseleave", function () {
+        d3.select(this).interrupt().transition().duration(160).attr("stroke", "#050508").attr("stroke-width", 2);
+        tipHide();
+      })
+      .transition().duration(700).attrTween("d", function (d) {
+        const i0 = d3.interpolate({ startAngle: d.startAngle, endAngle: d.startAngle }, d);
+        return t => arc(i0(t));
+      });
+    g.selectAll("text.dlab").data(pieD.filter(function (d) { return d.endAngle - d.startAngle > 0.11; }))
+      .join("text").attr("class", "dlab")
+      .attr("text-anchor", "middle").attr("dominant-baseline", "middle")
+      .attr("fill", "#fff").style("font-size", "11px").style("font-weight", "800")
+      .style("paint-order", "stroke").style("stroke", "#050508").style("stroke-width", "3px").style("stroke-linejoin", "round")
+      .attr("opacity", 0)
+      .attr("transform", function (d) {
+        const c = arcLab.centroid(d);
+        return "translate(" + c[0] + "," + c[1] + ")";
+      })
+      .text(function (d) { return Math.round(d.data.count / tot * 100) + "% · " + d.data.count; })
+      .transition().delay(720).duration(420).attr("opacity", 1);
+    const donutItems = pieD.map((d, j) => {
+      const pct = Math.round(d.data.count / tot * 100);
+      const name = String(d.data.key);
+      return { hex: PAL[j % 4], text: name + " · " + pct + "% · " + d.data.count + " 张" };
+    });
+    setFigCaptionLegend(
+      container,
+      donutItems,
+      "自 12 点起顺时针累加扇区；面积与条数成正比。点击扇区筛选。\n" + captionSampleLine(rows)
+    );
+  }
+
+  function chartPolarSpider(container, key, rows) {
+    const agg = aggregate(rows, key).slice(0, 7);
+    if (!agg.length) return;
+    const w = chartBoxW(container);
+    const h = 468;
+    const cx = w / 2;
+    const cy = h / 2 - 4;
+    const r0 = 44;
+    const r1 = Math.min(168, Math.min(w, h) * 0.36);
+    const n = agg.length;
+    const max = d3.max(agg, d => d.count) || 1;
+    const svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    const gridPol = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    let gp = 0;
+    gridDenseBetween([0, 0.25, 0.5, 0.75, 1]).forEach(function (t) {
+      const rr = r0 + t * (r1 - r0);
+      const cPol = gridPol.append("circle").attr("cx", cx).attr("cy", cy).attr("r", rr).attr("fill", "none")
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", t === 0 ? 0.75 : CHART_GRID_W);
+      revealCircleStroke(d3.select(cPol.node()), rr, 640, gp);
+      gp += 12;
+    });
+    d3.range(0, n).forEach(function (i) {
+      const ang = (i / n) * 2 * Math.PI - Math.PI / 2;
+      const ln = gridPol.append("line")
+        .attr("x1", cx).attr("y1", cy).attr("x2", cx + Math.cos(ang) * r1).attr("y2", cy + Math.sin(ang) * r1)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 560, gp + i * 28);
+    });
+    d3.range(0, n).forEach(function (i) {
+      const ang = ((i + 0.5) / n) * 2 * Math.PI - Math.PI / 2;
+      const ln = gridPol.append("line")
+        .attr("x1", cx).attr("y1", cy).attr("x2", cx + Math.cos(ang) * r1).attr("y2", cy + Math.sin(ang) * r1)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 500, gp + (n + i) * 22);
+    });
+    gp += n * 52 + 40;
+    svg.append("text").attr("x", cx).attr("y", 18).attr("text-anchor", "middle").attr("fill", "#ddd").style("font-size", "12px").style("font-weight", "700")
+      .attr("opacity", 0).text("纵轴（径向）：条数相对当前图内最大值；横轴（圆周）：图像来源类型")
+      .transition().delay(gp).duration(400).attr("opacity", 1);
+    svg.append("text").attr("x", cx + r1 + 16).attr("y", cy - r1 + 14).attr("fill", "#6c58ee").style("font-size", "9px")
+      .attr("opacity", 0).text("半径 100%").transition().delay(gp + 80).duration(350).attr("opacity", 1);
+    svg.append("text").attr("x", cx + r1 + 16).attr("y", cy - (r0 + (r1 - r0) * 0.5) + 5).attr("fill", "#777").style("font-size", "9px")
+      .attr("opacity", 0).text("50%").transition().delay(gp + 100).duration(350).attr("opacity", 1);
+    svg.append("text").attr("x", cx + r1 + 16).attr("y", cy - r0 + 12).attr("fill", "#555").style("font-size", "9px")
+      .attr("opacity", 0).text("0").transition().delay(gp + 120).duration(350).attr("opacity", 1);
+    const pts = [];
+    agg.forEach((d, i) => {
+      const ang = (i / n) * 2 * Math.PI - Math.PI / 2;
+      const rr = r0 + (d.count / max) * (r1 - r0);
+      const x = cx + Math.cos(ang) * rr;
+      const y = cy + Math.sin(ang) * rr;
+      pts.push([x, y]);
+      const labR = r1 + 38 + (Math.sin(ang) < -0.65 ? 34 : 0);
+      const lx = cx + Math.cos(ang) * labR;
+      const ly = cy + Math.sin(ang) * labR;
+      let short = String(d.key);
+      if (short.length > 10) short = short.slice(0, 9) + "…";
+      const ta = Math.abs(Math.cos(ang)) < 0.35 ? "middle" : (Math.cos(ang) > 0 ? "start" : "end");
+      svg.append("text").attr("x", lx).attr("y", ly).attr("text-anchor", ta).attr("dominant-baseline", "middle")
+        .attr("fill", "#c8c8d4").style("font-size", "10px").style("font-weight", "700").attr("opacity", 0).text(short)
+        .transition().delay(gp + 160 + i * 55).duration(380).attr("opacity", 1);
+    });
+    const line = d3.line().curve(d3.curveLinearClosed);
+    const path = svg.append("path").attr("fill", PAL[0]).attr("fill-opacity", 0.12).attr("stroke", PAL[1]).attr("stroke-width", 5)
+      .attr("stroke-linejoin", "miter").attr("d", line(pts)).style("cursor", "pointer")
+      .on("mouseenter", function () {
+        d3.select(this).interrupt().transition().duration(140).attr("stroke-width", 7).attr("fill-opacity", 0.26);
+      })
+      .on("mouseleave", function () {
+        d3.select(this).interrupt().transition().duration(160).attr("stroke-width", 5).attr("fill-opacity", 0.18);
+      });
+    whenChartVisible(container, () => {
+      try {
+        const len = path.node().getTotalLength();
+        path.attr("stroke-dasharray", len).attr("stroke-dashoffset", len)
+          .transition().delay(gp + 200).duration(2300).ease(d3.easeCubicOut).attr("stroke-dashoffset", 0)
+          .attr("fill-opacity", 0.18);
+      } catch (er) {}
+    });
+    agg.forEach((d, i) => {
+      const ang = (i / n) * 2 * Math.PI - Math.PI / 2;
+      const rr = r0 + (d.count / max) * (r1 - r0);
+      const px = cx + Math.cos(ang) * rr;
+      const py = cy + Math.sin(ang) * rr;
+      const pct = max ? Math.round(d.count / max * 100) : 0;
+      const inward = 22;
+      const ox = -Math.cos(ang) * inward;
+      const oy = -Math.sin(ang) * inward;
+      svg.append("circle").attr("cx", px).attr("cy", py).attr("r", 0)
+        .attr("fill", PAL[i % 4]).attr("stroke", "#fff").attr("stroke-width", 2)
+        .style("cursor", "pointer")
+        .on("click", () => setFilter(key, d.key))
+        .on("mouseenter", function (ev) {
+          d3.select(this).interrupt().transition().duration(140).attr("r", 12).attr("stroke-width", 3);
+          tipShow(ev, esc(String(d.key)) + "<br>" + d.count + " 张 · " + pct + "%");
+        })
+        .on("mousemove", moveTip)
+        .on("mouseleave", function () {
+          d3.select(this).interrupt().transition().duration(160).attr("r", 9).attr("stroke-width", 2);
+          tipHide();
+        })
+        .transition().delay(gp + 400 + i * 90).duration(520).ease(d3.easeElasticOut).attr("r", 9);
+      svg.append("text").attr("x", px + ox).attr("y", py + oy).attr("text-anchor", "middle").attr("dominant-baseline", "middle")
+        .attr("fill", "#fff").style("font-size", "10px").style("font-weight", "800")
+        .style("paint-order", "stroke").style("stroke", "#050508").style("stroke-width", "3px").style("stroke-linejoin", "round")
+        .attr("opacity", 0).text(d.count + "张·" + pct + "%")
+        .transition().delay(gp + 520 + i * 90).duration(360).attr("opacity", 1);
+    });
+    const vertItems = agg.map((d, i) => {
+      const name = String(d.key).length > 12 ? String(d.key).slice(0, 11) + "…" : String(d.key);
+      return { hex: PAL[i % 4], text: name + " · " + d.count + " 张（沿圆周第 " + (i + 1) + " 顶点）" };
+    });
+    setFigCaptionLegend(
+      container,
+      [{ hex: PAL[0], text: "粉洋红系填充区域：各来源条数归一化后的多边形" }].concat(vertItems),
+      "【读图】多边形顶点落在对应辐条上，离圆心越远表示该来源条数越接近当前最大值（" + max + "）。\n" + captionSampleLine(rows)
+    );
+  }
+
+  function chartDualAreaStripes(container, rows) {
+    const list = rows.slice();
+    const bins = 14;
+    const slot = Math.max(1, Math.ceil(list.length / bins));
+    const ser = [];
+    for (let b = 0; b < bins; b++) {
+      let bw = 0, c = 0;
+      for (let k = b * slot; k < Math.min(list.length, (b + 1) * slot); k++) {
+        const col = String(list[k][F.黑白彩色]);
+        bw += col.indexOf("黑白") >= 0 && col.indexOf("彩") < 0 ? 1 : 0;
+        c += col.indexOf("彩") >= 0 ? 1 : 0;
+      }
+      ser.push({ i: b, bw, c });
+    }
+    const w = chartBoxW(container);
+    const margin = { t: 52, r: 24, b: 52, l: 52 };
+    const iw = w - margin.l - margin.r;
+    const ih = 320;
+    const h = margin.t + ih + margin.b;
+    const x = d3.scaleLinear().domain([0, bins - 1]).range([margin.l, margin.l + iw]);
+    const maxY = d3.max(ser, d => Math.max(d.bw, d.c)) || 1;
+    const y = d3.scaleLinear().domain([0, maxY]).nice().range([margin.t + ih, margin.t]);
+    const svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    const gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    let gd = 0;
+    const yTicksDa = y.ticks(6).filter(function (yt) {
+      return yt >= y.domain()[0] && yt <= y.domain()[1];
+    });
+    gridDenseBetween(yTicksDa).forEach(function (yt) {
+      const yy = y(yt);
+      if (yy < margin.t - 1 || yy > margin.t + ih + 1) return;
+      const ln = gridG.append("line")
+        .attr("x1", margin.l).attr("x2", margin.l + iw).attr("y1", yy).attr("y2", yy)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 560, gd);
+      gd += 6;
+    });
+    d3.range(0, bins).forEach(function (bi) {
+      const xv = x(bi);
+      const ln = gridG.append("line")
+        .attr("x1", xv).attr("x2", xv).attr("y1", margin.t).attr("y2", margin.t + ih)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 520, gd);
+      gd += 10;
+    });
+    for (let bi2 = 0; bi2 < bins - 1; bi2++) {
+      const xL = x(bi2), xR = x(bi2 + 1);
+      const xm = (xL + xR) / 2;
+      const wBin = xR - xL;
+      [xm, xL + wBin * 0.25, xL + wBin * 0.75].forEach(function (xv) {
+        const ln = gridG.append("line")
+          .attr("x1", xv).attr("x2", xv).attr("y1", margin.t).attr("y2", margin.t + ih)
+          .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+        revealStrokeLine(ln, 480, gd);
+        gd += 6;
+      });
+    }
+    const nRows = list.length;
+    const ex0a = 1;
+    const ex0b = Math.min(slot, nRows);
+    const ex1a = Math.min(slot + 1, nRows);
+    const bucketExplain =
+      "分桶：每段约 " + slot + " 行；例如第 0 段≈原表第 " + ex0a + "–" + ex0b + " 行，第 1 段≈第 " + ex1a + " 行起。";
+    svg.append("text").attr("x", margin.l + iw / 2).attr("y", 14).attr("text-anchor", "middle").attr("fill", "#ddd").style("font-size", "11px").style("font-weight", "700")
+      .text("纵轴：每段里「黑白」「彩色」各多少条；横轴：第几段（见下行公式）");
+    svg.append("text").attr("x", margin.l + iw / 2).attr("y", 30).attr("text-anchor", "middle").attr("fill", "#aaa").style("font-size", "9px")
+      .text(bucketExplain);
+    ser.forEach((d, i) => {
+      const x0 = x(i) - (x(1) - x(0)) / 2;
+      const ww = (x(1) - x(0)) * 0.92;
+      svg.append("rect").attr("x", x0).attr("y", margin.t).attr("width", ww).attr("height", ih)
+        .attr("fill", PAL[i % 4]).attr("opacity", 0.08).attr("stroke", "none");
+    });
+    const areaBw = d3.area().x((_, i) => x(i)).y0(y(0)).y1(d => y(d.bw)).curve(d3.curveMonotoneX);
+    const areaC = d3.area().x((_, i) => x(i)).y0(y(0)).y1(d => y(d.c)).curve(d3.curveMonotoneX);
+    const clipUid = "da_" + Math.random().toString(36).slice(2, 11);
+    const defs = svg.append("defs");
+    const fillBw = chartBarGradientUrl(defs, "da_bw", PAL[1]);
+    const fillC = chartBarGradientUrl(defs, "da_c", PAL[3]);
+    const crBw = defs.append("clipPath").attr("id", clipUid + "bw").append("rect")
+      .attr("x", margin.l).attr("y", margin.t + ih).attr("width", iw).attr("height", 0);
+    const crC = defs.append("clipPath").attr("id", clipUid + "c").append("rect")
+      .attr("x", margin.l).attr("y", margin.t + ih).attr("width", iw).attr("height", 0);
+    svg.append("path")
+      .attr("fill", fillBw).attr("fill-opacity", 0.72).attr("stroke", PAL[1]).attr("stroke-width", 3)
+      .attr("d", areaBw(ser))
+      .attr("clip-path", "url(#" + clipUid + "bw)")
+      .style("cursor", "pointer")
+      .on("mouseenter", function () {
+        d3.select(this).interrupt().transition().duration(120).attr("fill-opacity", 0.95).attr("stroke-width", 4);
+      })
+      .on("mouseleave", function () {
+        d3.select(this).interrupt().transition().duration(160).attr("fill-opacity", 0.72).attr("stroke-width", 3);
+      });
+    svg.append("path")
+      .attr("fill", fillC).attr("fill-opacity", 0.68).attr("stroke", PAL[3]).attr("stroke-width", 3)
+      .attr("d", areaC(ser))
+      .attr("clip-path", "url(#" + clipUid + "c)")
+      .style("cursor", "pointer")
+      .on("mouseenter", function () {
+        d3.select(this).interrupt().transition().duration(120).attr("fill-opacity", 0.95).attr("stroke-width", 4);
+      })
+      .on("mouseleave", function () {
+        d3.select(this).interrupt().transition().duration(160).attr("fill-opacity", 0.68).attr("stroke-width", 3);
+      });
+    crBw.transition().duration(920).ease(d3.easeCubicOut).attr("y", margin.t).attr("height", ih);
+    crC.transition().duration(920).delay(130).ease(d3.easeCubicOut).attr("y", margin.t).attr("height", ih);
+    svg.append("g").attr("transform", "translate(" + margin.l + ",0)")
+      .call(d3.axisLeft(y).ticks(5).tickFormat(d3.format("d")))
+      .call(g => g.select(".domain").attr("stroke", CHART_AXIS_DOMAIN_STROKE).attr("stroke-width", 1.6))
+      .call(g => g.selectAll(".tick line").attr("stroke", CHART_AXIS_TICK_STROKE).attr("stroke-width", CHART_AXIS_TICK_W))
+      .selectAll("text").attr("fill", "#ccc").style("font-size", "10px");
+    svg.append("text").attr("transform", "translate(16," + (margin.t + ih / 2) + ") rotate(-90)").attr("text-anchor", "middle")
+      .attr("fill", "#ddd").style("font-size", "11px").style("font-weight", "700").text("纵轴：每段内条数");
+    const xAxis = d3.scaleLinear().domain([0, bins - 1]).range([margin.l, margin.l + iw]);
+    const xAxB = svg.append("g").attr("transform", "translate(0," + (margin.t + ih) + ")")
+      .call(d3.axisBottom(xAxis).ticks(7).tickFormat(d3.format("d")))
+      .call(g => g.select(".domain").attr("stroke", CHART_AXIS_DOMAIN_STROKE).attr("stroke-width", 1.6))
+      .call(g => g.selectAll(".tick line").attr("stroke", CHART_AXIS_TICK_STROKE).attr("stroke-width", CHART_AXIS_TICK_W));
+    xAxB.selectAll("text").attr("fill", "#ccc").style("font-size", "10px");
+    animateAxisStrokeLines(xAxB, gd + 80);
+    let hasL = 0, noL = 0;
+    list.forEach(r => { if (norm(r[F.图片])) hasL++; else noL++; });
+    svg.append("text").attr("x", margin.l + iw / 2).attr("y", h - 6).attr("text-anchor", "middle").attr("fill", "#aaa").style("font-size", "10px")
+      .text("横轴刻度 = 表格行顺序上的段序号；数据列仅「黑白/彩色」，与平台/阶段无关");
+    svg.append("text").attr("x", margin.l).attr("y", h - 22).attr("fill", "#777").style("font-size", "9px")
+      .text("图片列：有链接 " + hasL + " · 无链接 " + noL);
+    setFigCaptionLegend(
+      container,
+      [
+        { hex: PAL[1], text: "青色曲线：各段内黑白条数" },
+        { hex: PAL[3], text: "黄色曲线：各段内彩色条数" }
+      ],
+      "按当前筛选后的行顺序均分为 " + bins + " 段；纵轴为段内计数。带色竖带仅区分段号。\n" + captionSampleLine(rows)
+    );
+  }
+
+  function chartBarsPicto(container, key, rows) {
+    const agg = aggregate(rows, key).slice(0, 5);
+    if (!agg.length) return;
+    const w = chartBoxW(container);
+    const margin = { t: 28, r: 22, b: 78, l: 50 };
+    const iw = w - margin.l - margin.r;
+    const ih = 260;
+    const h = margin.t + ih + margin.b;
+    const max = d3.max(agg, d => d.count) || 1;
+    const xb = d3.scaleBand().domain(agg.map(d => d.key)).range([margin.l, margin.l + iw]).padding(0.28);
+    const y = d3.scaleLinear().domain([0, max]).nice().range([margin.t + ih, margin.t]);
+    const svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    const defsBp = svg.append("defs");
+    const gridBp = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    let gb = 0;
+    const yTickBp = y.ticks(5).filter(function (yt) { return yt >= 0 && yt <= max; });
+    gridDenseBetween(yTickBp).forEach(function (yt) {
+      const yy = y(yt);
+      const ln = gridBp.append("line")
+        .attr("x1", margin.l).attr("x2", margin.l + iw).attr("y1", yy).attr("y2", yy)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 540, gb);
+      gb += 10;
+    });
+    agg.forEach(function (d) {
+      const x0 = xb(d.key);
+      const bw = xb.bandwidth();
+      [0, 0.25, 0.5, 0.75, 1].forEach(function (t) {
+        const xc = x0 + t * bw;
+        const ln = gridBp.append("line")
+          .attr("x1", xc).attr("x2", xc).attr("y1", margin.t).attr("y2", margin.t + ih)
+          .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+        revealStrokeLine(ln, 500, gb);
+        gb += 8;
+      });
+    });
+    svg.append("text").attr("x", margin.l + iw / 2).attr("y", 14).attr("text-anchor", "middle").attr("fill", "#ddd").style("font-size", "11px").style("font-weight", "700")
+      .text("纵轴：条数；横轴：模板类型（类别名）");
+    agg.forEach((d, i) => {
+      const x0 = xb(d.key);
+      const bw = xb.bandwidth();
+      const fillBP = chartBarGradientUrl(defsBp, "bp_" + i, PAL[i % 4]);
+      let nm = String(d.key);
+      if (nm.length > 14) nm = nm.slice(0, 13) + "…";
+      svg.append("rect").attr("x", x0).attr("y", y(0)).attr("width", bw).attr("height", 0)
+        .attr("fill", fillBP).attr("stroke", "#fff").attr("stroke-width", 3)
+        .style("cursor", "pointer")
+        .on("click", () => setFilter(key, d.key))
+        .on("mouseenter", function (ev) {
+          d3.select(this).interrupt().transition().duration(120).attr("stroke-width", 4);
+          tipShow(ev, esc(nm) + "<br>" + d.count + " 张");
+        })
+        .on("mousemove", moveTip)
+        .on("mouseleave", function () {
+          d3.select(this).interrupt().transition().duration(140).attr("stroke-width", 3);
+          tipHide();
+        })
+        .transition().duration(500).delay(i * 70).attr("y", y(d.count)).attr("height", y(0) - y(d.count));
+      const ix = x0 + bw / 2 - 16;
+      const iy = margin.t + ih + 10;
+      const g = svg.append("g").attr("transform", "translate(" + ix + "," + iy + ")");
+      for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+        g.append("rect").attr("x", c * 8).attr("y", r * 8).attr("width", 6).attr("height", 6)
+          .attr("fill", ((r + c + i) % 3 === 0) ? PAL[0] : "#222").attr("stroke", "#444").attr("stroke-width", 1);
+      }
+    });
+    const yAxisG = svg.append("g").attr("transform", "translate(" + margin.l + ",0)")
+      .call(d3.axisLeft(y).ticks(5).tickFormat(d3.format("d")))
+      .call(g => g.select(".domain").attr("stroke", CHART_AXIS_DOMAIN_STROKE).attr("stroke-width", 1.6))
+      .call(g => g.selectAll(".tick line").attr("stroke", CHART_AXIS_TICK_STROKE).attr("stroke-width", CHART_AXIS_TICK_W));
+    yAxisG.selectAll("text").attr("fill", "#ccc").style("font-size", "10px");
+    animateAxisStrokeLines(yAxisG, gb);
+    const xAxP = svg.append("g").attr("transform", "translate(0," + (margin.t + ih) + ")")
+      .call(d3.axisBottom(xb))
+      .call(g => g.select(".domain").attr("stroke", CHART_AXIS_DOMAIN_STROKE).attr("stroke-width", 1.6))
+      .call(g => g.selectAll(".tick line").attr("stroke", CHART_AXIS_TICK_STROKE).attr("stroke-width", CHART_AXIS_TICK_W));
+    xAxP.selectAll("text").attr("fill", "#ccc").style("font-size", "9px").attr("transform", "rotate(-18)").style("text-anchor", "end");
+    animateAxisStrokeLines(xAxP, gb + 60);
+    const barLeg = agg.map((d, i) => {
+      const name = String(d.key).length > 12 ? String(d.key).slice(0, 11) + "…" : String(d.key);
+      return { hex: PAL[i % 4], text: name + " · " + d.count + " 张" };
+    });
+    setFigCaptionLegend(
+      container,
+      barLeg,
+      "柱高=该模板类型在筛选下的条数；下方面块为像素示意。点击柱筛选。\n" + captionSampleLine(rows)
+    );
+  }
+
+  function chartRidgeWordcount(container, rows) {
+    const aggPh = sortPhases(aggregate(rows, F.阶段));
+    const phases = aggPh.map(d => d.key);
+    if (!phases.length) return;
+    const w = chartBoxW(container);
+    const maxW = 12;
+    const rowH = 108;
+    const margin = { l: 122, r: 24, t: 22, b: 40 };
+    const iw = w - margin.l - margin.r;
+    const plotBottom = margin.t + phases.length * rowH;
+    const h = plotBottom + margin.b;
+    const x = d3.scaleLinear().domain([0, maxW]).range([margin.l, margin.l + iw]);
+    const svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    const ridgeDefs = svg.append("defs");
+    const gridRd = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    let grx = 0;
+    const ridgeRowYs = d3.range(0, phases.length + 1).map(function (pi) { return margin.t + pi * rowH; });
+    gridDenseBetween(ridgeRowYs).forEach(function (yy) {
+      const ln = gridRd.append("line")
+        .attr("x1", margin.l).attr("x2", margin.l + iw).attr("y1", yy).attr("y2", yy)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 580, grx);
+      grx += 14;
+    });
+    d3.range(0, maxW * 4 + 1).forEach(function (k) {
+      const v = k / 4;
+      if (v > maxW) return;
+      const xv = x(v);
+      const ln = gridRd.append("line")
+        .attr("x1", xv).attr("x2", xv).attr("y1", margin.t).attr("y2", plotBottom)
+        .attr("stroke", CHART_GRID_STROKE).attr("stroke-width", CHART_GRID_W);
+      revealStrokeLine(ln, 520, grx);
+      grx += 8;
+    });
+    svg.append("text").attr("x", margin.l + iw / 2).attr("y", 14).attr("text-anchor", "middle").attr("fill", "#ddd").style("font-size", "11px").style("font-weight", "700")
+      .attr("opacity", 0).text("横轴：单图字数 0–12　每行纵带：该阶段内各字数的频数")
+      .transition().delay(grx + 40).duration(400).attr("opacity", 1);
+    phases.forEach((ph, pi) => {
+      const sub = rows.filter(r => norm(r[F.阶段]) === ph);
+      const hist = d3.range(0, maxW + 1).map(v => ({ v, n: 0 }));
+      sub.forEach(r => {
+        const v = Math.min(maxW, Math.max(0, +r[F.字数] | 0));
+        if (!isNaN(v)) hist[v].n++;
+      });
+      const m = d3.max(hist, d => d.n) || 1;
+      const yb = margin.t + pi * rowH + rowH - 8;
+      const y0 = margin.t + pi * rowH + 8;
+      const ys = d3.scaleLinear().domain([0, m]).range([yb, y0]);
+      const area = d3.area().x(d => x(d.v)).y0(yb).y1(d => ys(d.n)).curve(d3.curveMonotoneX);
+      const clipId = "ridge_" + pi + "_" + Math.random().toString(36).slice(2, 9);
+      const crect = ridgeDefs.append("clipPath").attr("id", clipId).append("rect")
+        .attr("x", margin.l).attr("y", yb).attr("width", iw).attr("height", 0);
+      const pth = svg.append("path").attr("fill", PAL[pi % 4]).attr("fill-opacity", 0).attr("stroke", PAL[pi % 4]).attr("stroke-width", 2)
+        .attr("d", area(hist)).attr("clip-path", "url(#" + clipId + ")").style("cursor", "pointer")
+        .on("click", () => setPhase(ph))
+        .on("mouseenter", function (ev) {
+          d3.select(this).interrupt().transition().duration(120).attr("fill-opacity", 0.52).attr("stroke-width", 3.5);
+          tipShow(ev, esc(ph) + "<br>本行样本 " + sub.length + " 条（点击筛选该阶段）");
+        })
+        .on("mousemove", moveTip)
+        .on("mouseleave", function () {
+          d3.select(this).interrupt().transition().duration(160).attr("fill-opacity", 0.35).attr("stroke-width", 2);
+          tipHide();
+        });
+      let lenP = 0;
+      try {
+        lenP = pth.node().getTotalLength();
+        if (lenP > 0) pth.attr("stroke-dasharray", lenP + " " + lenP).attr("stroke-dashoffset", lenP);
+      } catch (er) { /* ignore */ }
+      const t0 = grx + 180 + pi * 200;
+      crect.transition().duration(1280).delay(t0).ease(d3.easeCubicOut).attr("y", y0).attr("height", yb - y0);
+      pth.transition().delay(t0 + 90).duration(1100).ease(d3.easeCubicOut)
+        .attr("fill-opacity", 0.35)
+        .attr("stroke-dashoffset", 0);
+      svg.append("text").attr("x", margin.l - 14).attr("y", y0 + (rowH - 16) / 2).attr("text-anchor", "end")
+        .attr("fill", "#ccc").style("font-size", "10px").attr("opacity", 0)
+        .text(ph.length > 8 ? ph.slice(0, 7) + "…" : ph)
+        .transition().delay(t0 + 200).duration(380).attr("opacity", 1);
+    });
+    const xAxRd = svg.append("g").attr("transform", "translate(0," + plotBottom + ")")
+      .call(d3.axisBottom(x).ticks(7).tickFormat(d3.format("d")))
+      .call(g => g.select(".domain").attr("stroke", CHART_AXIS_DOMAIN_STROKE).attr("stroke-width", 1.6))
+      .call(g => g.selectAll(".tick line").attr("stroke", CHART_AXIS_TICK_STROKE).attr("stroke-width", CHART_AXIS_TICK_W));
+    xAxRd.selectAll("text").attr("fill", "#ccc").style("font-size", "10px").attr("opacity", 0)
+      .transition().delay(grx + 200).duration(400).attr("opacity", 1);
+    animateAxisStrokeLines(xAxRd, grx + 80);
+    svg.append("text").attr("x", margin.l + iw / 2).attr("y", h - 20).attr("text-anchor", "middle").attr("fill", "#888").style("font-size", "9px").style("font-weight", "700").attr("opacity", 0).text("纵轴：传播阶段（分行）")
+      .transition().delay(grx + 220).duration(400).attr("opacity", 1);
+    svg.append("text").attr("x", margin.l + iw / 2).attr("y", h - 4).attr("text-anchor", "middle").attr("fill", "#aaa").style("font-size", "10px").attr("opacity", 0).text("横轴：单图字数（字）")
+      .transition().delay(grx + 260).duration(400).attr("opacity", 1);
+    const ridgeItems = phases.map((ph, pi) => ({ hex: PAL[pi % 4], text: "「" + ph + "」字数分布（行色与面积一致）" }));
+    setFigCaptionLegend(
+      container,
+      ridgeItems,
+      "每行面积高度=该字数在该阶段出现次数；曲线自下向上展开。点击面积按阶段筛选。\n" + captionSampleLine(rows)
+    );
+  }
+

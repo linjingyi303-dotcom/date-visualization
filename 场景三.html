@@ -1,0 +1,4501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>当下熊猫头表情包数据可视化（场景三）</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700;900&family=Press+Start+2P&display=swap" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <style>
+    @font-face {
+      font-family: "CLFN16";
+      src: url("CLFN 16x CN.ttf") format("truetype"),
+           url("../CLFN 16x CN.ttf") format("truetype");
+      font-weight: normal;
+      font-style: normal;
+      font-display: swap;
+    }
+        :root {
+      --bg: #000000;
+      --panel: #0c0c0c;
+      --line: #333;
+      --c1: #f54595;
+      --c2: #6c58ee;
+      --c3: #59e2fd;
+      --c4: #fce500;
+      --txt: #fff;
+      --muted: #888;
+      /* 中文正文优先 CLFN 像素体；字号尽量取 16 的整数倍更易栅格对齐 */
+      --font-heading: "CLFN16", "Press Start 2P", monospace;
+      --font-pixel: "CLFN16", "Press Start 2P", monospace;
+      --fs-title-max: clamp(34px, 3.2vw, 72px);
+      --fs-title-panel: clamp(26px, 2.4vw, 52px);
+      --fs-body: clamp(16px, 1.15vw, 22px);
+      --fs-ui: clamp(17px, 1.05vw, 22px);
+      /* 图表 SVG 入场过渡时长 */
+      --chart-svg-reveal: 1.7s;
+      /* 页边距 */
+      --page-pt: 132px;
+      --page-pb: 132px;
+      --page-px: 127px;
+      /* 底部数据说明条高度（与 #charts 底部留白一致） */
+      --narr-bar-max-h: clamp(150px, 26vh, 210px);
+      /* 为左下角「继续」预留宽度（图标+阴影+字距） */
+      --continue-reserve: 200px;
+      /* 固定底栏距视口底边（略大于安全区） */
+      --dock-bottom-gap: max(16px, env(safe-area-inset-bottom, 0px));
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html {
+      scroll-behavior: auto;
+      scroll-snap-type: none;
+      scroll-padding-top: 6px;
+      background: #000;
+    }
+    body {
+      font-family: var(--font-pixel);
+      background: #000;
+      color: var(--txt);
+      overflow-x: hidden;
+      -webkit-font-smoothing: none;
+      -moz-osx-font-smoothing: unset;
+      font-synthesis: none;
+      text-rendering: optimizeSpeed;
+    }
+    /* 图表内 SVG 文字同步为像素字体（避免仍像黑体） */
+    .chart-pixel-svg text,
+    .chart-pixel-svg tspan,
+    .chart-svg text,
+    .chart-svg tspan {
+      font-family: "CLFN16", "Press Start 2P", monospace !important;
+    }
+    /* 通用：像素风逐字显现（模糊→清晰 + 阶梯感），全站文字共用 */
+    .pixel-reveal-char {
+      display: inline-block;
+      opacity: 0;
+      filter: blur(14px) contrast(0.35);
+      transform: translateY(5px) scale(1.12);
+      animation: pixelCharCrisp 0.34s steps(4, end) forwards;
+    }
+    svg text tspan.pixel-reveal-char {
+      display: inline;
+    }
+    @keyframes pixelCharCrisp {
+      0% {
+        opacity: 0;
+        filter: blur(12px) contrast(0.25);
+        transform: translateY(5px) scale(1.12);
+      }
+      55% {
+        opacity: 0.92;
+        filter: blur(3px) contrast(1.08);
+        transform: translateY(1px) scale(1.03);
+      }
+      100% {
+        opacity: 1;
+        filter: blur(0) contrast(1);
+        transform: translateY(0) scale(1);
+      }
+    }
+    /* 右侧图注：更快逐字显现 */
+    .pixel-reveal-char--cap {
+      animation-duration: 0.18s;
+      animation-timing-function: steps(3, end);
+    }
+        .halftone-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 0;
+      pointer-events: none;
+      background: #000;
+    }
+    /* 进度条不占满最右侧，避免与固定 dock 视觉重叠 */
+    #progress {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 4px;
+      width: 0;
+      z-index: 10000;
+      background: var(--c1);
+      box-shadow: none;
+      transition: width 0.08s linear;
+      max-width: none;
+    }
+    #tip {
+      position: fixed; z-index: 20000; max-width: min(520px, 92vw);
+      padding: 14px 16px;
+      background: rgba(6, 6, 10, 0.94);
+      border: 3px solid rgba(89, 226, 253, 0.45);
+      box-shadow: 0 0 40px rgba(108, 88, 238, 0.35), 0 12px 32px rgba(0, 0, 0, 0.65);
+      font: 400 var(--fs-body) / 1.55 var(--font-pixel);
+      pointer-events: none; opacity: 0;
+      transform: scale(0.92) translateY(8px);
+      transition: opacity 0.2s ease, transform 0.35s cubic-bezier(0.34, 1.4, 0.64, 1);
+      word-break: break-word;
+    }
+    #tip.on { opacity: 1; transform: scale(1) translateY(0); }
+    #tip img { width: 64px; height: 64px; object-fit: cover; border: none; display: block; margin: 0 auto 8px; }
+
+    .filters-dock {
+      position: fixed;
+      left: 10px;
+      top: 12px;
+      transform: none;
+      z-index: 500;
+      max-width: min(300px, 40vw);
+      width: max-content;
+      padding: 6px 28px 6px 8px;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 5px 8px;
+      pointer-events: auto;
+    }
+    .filters-dock-arrow {
+      position: absolute;
+      right: 4px;
+      top: 50%;
+      margin-top: -0.55em;
+      font-size: clamp(14px, 2.2vw, 20px);
+      line-height: 1;
+      color: var(--c4);
+      text-shadow: 0 0 10px var(--c1), 2px 0 0 #000;
+      pointer-events: none;
+      animation: filtersArrowNudge 1.1s ease-in-out infinite;
+    }
+    @keyframes filtersArrowNudge {
+      0%, 100% { transform: translateX(0); opacity: 0.75; }
+      50% { transform: translateX(7px); opacity: 1; }
+    }
+    .filters-dock-title {
+      font: 700 clamp(10px, 1.25vw, 13px) / 1.3 var(--font-pixel);
+      color: var(--c4);
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .filters-dock .filters {
+      flex: 0 1 auto;
+      min-height: 0;
+      margin-top: 0;
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 5px 6px;
+      max-width: min(260px, 36vw);
+    }
+    .filters-dock .chip,
+    .filters-dock button.ghost {
+      margin-left: 0;
+      width: auto;
+      text-align: center;
+      word-break: break-word;
+      font-size: clamp(9px, 1.15vw, 12px);
+      padding: 3px 6px;
+      letter-spacing: 0.04em;
+    }
+    .filters-dock button.ghost { padding: 3px 8px; }
+    .app { position: relative; z-index: 10; max-width: 2558px; margin: 0 auto; padding: var(--page-pt) var(--page-px) var(--page-pb); }
+    .viz-snap-page {
+      box-sizing: border-box;
+      min-height: 0;
+    }
+    /* 首屏占满视口剩余高度，避免下一屏「阶段」标题在首屏底部露边 */
+    .viz-snap-page.viz-snap-intro {
+      min-height: max(520px, calc(100svh - var(--page-pt)));
+      overflow: hidden;
+    }
+    .viz-snap-intro {
+      display: flex;
+      flex-direction: column;
+      flex-wrap: nowrap;
+      justify-content: center;
+      align-items: center;
+      gap: 0;
+      padding: 0;
+      min-height: max(520px, calc(100svh - var(--page-pt)));
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+    .app-main-snap { display: block; width: 100%; max-width: 100%; box-sizing: border-box; }
+    .viz-main-charts {
+      display: block;
+      width: 100%;
+      max-width: min(2304px, 100%);
+      margin: 0 auto;
+    }
+    .viz-snap-intro .hero-pixel {
+      flex: 0 1 auto;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      min-height: 0;
+      padding: 8px 12px 28px;
+      margin: 0 auto;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+      isolation: isolate;
+    }
+    .viz-snap-intro .hero-scroll-hint {
+      position: relative;
+      z-index: 50;
+      margin: clamp(12px, 2vh, 24px) auto 0;
+      flex-shrink: 0;
+      max-width: min(640px, 92vw);
+      text-align: center;
+      transform: translateZ(0);
+      -webkit-transform: translateZ(0);
+    }
+    .viz-snap-intro .cube-stage {
+      flex: 0 1 auto;
+      min-height: 0;
+      padding: 8px 0 clamp(32px, 6vmin, 80px);
+      margin-bottom: clamp(40px, 8vmin, 120px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1;
+      margin-top: calc(-1 * clamp(24px, 4vh, 56px));
+    }
+    .viz-snap-intro .cube-pivot {
+      --cube-s: min(56vmin, 72vw, 460px);
+      --cube-tilt: -8deg;
+    }
+    @media (max-width: 640px) {
+      .viz-snap-intro .cube-pivot { --cube-s: min(82vw, 320px); }
+    }
+    .viz-snap-phase-page {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: stretch;
+      min-height: min(100svh, 1080px);
+      padding: 28px 12px 40px;
+      box-sizing: border-box;
+    }
+    .viz-snap-phase-page .layout {
+      width: 100%;
+      max-width: min(2304px, 98vw);
+      margin: 0 auto;
+    }
+    .viz-snap-phase-page .panel.panel-phase-strip {
+      padding: 16px 0 24px;
+      margin: 0;
+    }
+    .viz-snap-phase-page .panel-phase-strip .h2-compact {
+      font-size: clamp(26px, 3.8vw, 42px);
+      margin-bottom: 10px;
+      color: #fff;
+    }
+    .viz-snap-phase-page .panel-phase-strip .hint-compact {
+      font-size: clamp(12px, 1.45vw, 17px);
+      margin-bottom: 14px;
+      max-width: 48rem;
+    }
+    .viz-snap-phase-page .panel-phase-strip .panel-inner--compact .badge {
+      font-size: clamp(12px, 1.5vw, 17px);
+      margin-bottom: 8px;
+    }
+    /* 与 场景二.html 的 .viz-snap-phase-page 阶段条一致；#phases 另用网格对齐上下两行三列 */
+    .viz-snap-phase-page .phase-row-inline {
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px 12px;
+      margin-top: 8px;
+      padding: 8px 4px 12px;
+      overflow-x: visible;
+      overflow-y: visible;
+    }
+    /* 全部 + 6 阶段：避免 flex 第二行在整宽居中导致与第一行三列错位 */
+    .viz-snap-phase-page #phases.phase-row-inline {
+      display: grid;
+      grid-template-columns: minmax(min(280px, 28vw), 1.1fr) repeat(3, minmax(min(240px, 22vw), 1fr));
+      grid-template-rows: auto auto;
+      column-gap: 12px;
+      row-gap: 10px;
+      align-items: start;
+      width: 100%;
+      max-width: min(2304px, 100%);
+      margin-left: auto;
+      margin-right: auto;
+      box-sizing: border-box;
+    }
+    .viz-snap-phase-page #phases.phase-row-inline > .phase-block:first-child {
+      grid-column: 1;
+      grid-row: 1 / -1;
+    }
+    .viz-snap-phase-page #phases.phase-row-inline > .phase-block:nth-child(2) { grid-column: 2; grid-row: 1; }
+    .viz-snap-phase-page #phases.phase-row-inline > .phase-block:nth-child(3) { grid-column: 3; grid-row: 1; }
+    .viz-snap-phase-page #phases.phase-row-inline > .phase-block:nth-child(4) { grid-column: 4; grid-row: 1; }
+    .viz-snap-phase-page #phases.phase-row-inline > .phase-block:nth-child(5) { grid-column: 2; grid-row: 2; }
+    .viz-snap-phase-page #phases.phase-row-inline > .phase-block:nth-child(6) { grid-column: 3; grid-row: 2; }
+    .viz-snap-phase-page #phases.phase-row-inline > .phase-block:nth-child(7) { grid-column: 4; grid-row: 2; }
+    .viz-snap-phase-page .phase-block--strip {
+      min-width: min(300px, 26vw);
+      padding: 16px 14px 18px;
+    }
+    .viz-snap-phase-page .phase-block--strip h3 {
+      font-size: clamp(11px, 1.35vw, 14px);
+      margin-bottom: 6px;
+    }
+    .viz-snap-phase-page .phase-block--strip .meta {
+      font-size: clamp(11px, 1.3vw, 14px);
+      margin-bottom: 8px;
+    }
+    .viz-snap-phase-page .phase-thumbs--strip {
+      grid-template-columns: repeat(auto-fill, minmax(26px, 1fr));
+      gap: 4px 5px;
+      max-width: 100%;
+    }
+    .viz-snap-phase-page .phase-thumbs--strip img {
+      width: 26px;
+      height: 26px;
+      object-fit: cover;
+    }
+    .viz-snap-outro {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+      padding: 32px 16px;
+      padding-bottom: calc(var(--narr-bar-max-h) + 52px + var(--dock-bottom-gap));
+      min-height: max(360px, calc(100svh - var(--page-pt) - var(--page-pb)));
+      box-sizing: border-box;
+    }
+    .viz-snap-outro .foot { margin: 0; max-width: 48rem; text-align: center; }
+    .phase-nav-wrap {
+      display: flex;
+      justify-content: center;
+    }
+    a.phase-nav-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      min-height: 44px;
+      padding: 10px 28px;
+      background: #fff;
+      color: #111;
+      border: 2px solid #111;
+      box-shadow: 8px 8px 0 #555;
+      font: 400 clamp(16px, 1.1vw, 20px) / 1.2 var(--font-pixel);
+      text-decoration: none;
+      letter-spacing: 0.06em;
+      transition: transform 0.06s ease, box-shadow 0.06s ease;
+    }
+    a.phase-nav-btn:hover {
+      box-shadow: 6px 6px 0 #555;
+      transform: translate(2px, 2px);
+    }
+    /* 图表区：每块约占一屏高度，块间大间距；仅「当前」高亮，其余淡化 */
+    .chart-snap-page {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      align-items: stretch;
+      box-sizing: border-box;
+      min-height: min(100svh, 1580px);
+      padding: clamp(8px, 1.2vh, 24px) 16px clamp(40px, 6vh, 88px);
+      margin-bottom: clamp(40px, 7vh, 88px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      --viz-n: 0.35;
+    }
+    .chart-snap-page:last-child {
+      margin-bottom: 0;
+      border-bottom: none;
+    }
+    .chart-snap-page .panel-inner.chart-split-inner {
+      flex: 0 1 auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 0;
+      width: 100%;
+    }
+    .chart-snap-page .chart-visual-centered {
+      flex: 0 1 auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      min-height: 0;
+      max-width: min(2304px, 99vw);
+      transform: translateY(calc((1 - var(--viz-n, 0.5)) * -10px));
+      transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .chart-snap-page .chart-row {
+      max-width: min(98vw, 2304px);
+      width: 100%;
+      margin: 0 auto;
+      align-items: center;
+    }
+    .chart-snap-page .chart-row-main { min-height: 0; }
+    .chart-snap-page h3 {
+      font-size: clamp(30px, 2.65vw, 54px);
+      margin-bottom: 4px;
+      color: #fff;
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+      max-width: min(96vw, 2200px);
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .chart-snap-page .subt {
+      font-size: clamp(14px, 1.1vw, 20px);
+      margin-bottom: 4px;
+    }
+    .chart-snap-page .chart-figure-caption {
+      flex: 0 0 min(210px, 18vw);
+      width: min(210px, 18vw);
+      min-width: 160px;
+      font-size: clamp(8px, 0.72vw, 11px);
+    }
+    @media (max-width: 900px) {
+      .chart-snap-page .chart-figure-caption {
+        flex: 1 1 auto;
+        width: 100%;
+        max-width: min(40rem, 100%);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-snap-type: none;
+        scroll-behavior: auto;
+      }
+      .chart-panel-split {
+        transition: none;
+      }
+    }
+    .app.viz-bump { animation: vizBump 0.42s cubic-bezier(0.36, 0.07, 0.19, 0.97); }
+    @keyframes vizBump {
+      0%, 100% { transform: translateX(0); }
+      18% { transform: translateX(-5px); }
+      36% { transform: translateX(5px); }
+      54% { transform: translateX(-3px); }
+      72% { transform: translateX(3px); }
+    }
+
+    header.top {
+      position: relative;
+      z-index: 20;
+      background: transparent;
+      border: none;
+      backdrop-filter: none;
+      padding: 20px 16px 28px;
+      margin: 0 auto 12px;
+      max-width: 56rem;
+      text-align: center;
+    }
+    header.top h1 {
+      font-family: var(--font-heading);
+      font-size: var(--fs-title-max);
+      color: #fff;
+      text-shadow: 2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+      letter-spacing: 0.06em;
+      line-height: 1.2;
+    }
+    header.top .sub {
+      font: 400 var(--fs-body) / 1.65 var(--font-pixel);
+      color: var(--muted);
+      margin: 12px auto 0;
+      max-width: 46rem;
+      text-align: center;
+    }
+    .stat {
+      font: 700 var(--fs-ui) / 1.4 var(--font-pixel);
+      color: var(--c4);
+      margin-top: 12px;
+      letter-spacing: 0.04em;
+      transition: transform 0.25s, text-shadow 0.25s;
+    }
+    .stat.stat-pulse { animation: statKick 0.5s cubic-bezier(0.34, 1.6, 0.64, 1); }
+    @keyframes statKick {
+      0% { transform: scale(1); text-shadow: none; }
+      40% { transform: scale(1.12); text-shadow: 0 0 20px var(--c4), 0 0 40px var(--c1); }
+      100% { transform: scale(1); }
+    }
+    .filters {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center;
+      margin-top: 14px;
+      font: 700 var(--fs-ui) / 1.35 var(--font-pixel);
+    }
+    .chip {
+      background: rgba(245, 69, 149, 0.08);
+      border: 2px solid rgba(245, 69, 149, 0.35);
+      padding: 6px 10px;
+      color: var(--c3);
+      letter-spacing: 0.06em;
+      transition: transform 0.25s, border-color 0.25s, box-shadow 0.3s;
+    }
+    .chip:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(245, 69, 149, 0.25); }
+    .chip.dim { color: #555; background: transparent; border-color: transparent; }
+    button.ghost {
+      font: 700 var(--fs-ui) / 1.35 var(--font-pixel);
+      background: linear-gradient(180deg, transparent, rgba(89, 226, 253, 0.12));
+      border: 2px solid rgba(89, 226, 253, 0.4);
+      color: var(--c1);
+      text-decoration: none;
+      cursor: pointer;
+      margin-left: 8px;
+      padding: 6px 12px;
+      letter-spacing: 0.06em;
+      transition: transform 0.2s, box-shadow 0.3s, border-color 0.2s;
+    }
+    button.ghost:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 24px rgba(89, 226, 253, 0.35);
+      border-color: var(--c1);
+    }
+    button.ghost:active { transform: scale(0.97); }
+
+    .layout {
+      display: block;
+      max-width: 100%;
+      margin: 0 auto;
+    }
+    .panel {
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      padding: 20px 0;
+      margin-bottom: 8px;
+      position: relative;
+    }
+    .panel::before { display: none; }
+    .panel-inner { position: relative; z-index: 1; width: 100%; }
+    .panel-inner > .badge,
+    .panel-inner > h2,
+    .panel-inner > .hint { text-align: center; }
+    .badge {
+      display: block;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      color: var(--c4);
+      font: 700 var(--fs-ui) / 1.35 var(--font-pixel);
+      padding: 0;
+      margin: 0 auto 10px;
+      letter-spacing: 0.12em;
+      text-align: center;
+    }
+    .panel h2 {
+      font-family: var(--font-heading);
+      font-size: var(--fs-title-panel);
+      margin: 0 auto 12px;
+      letter-spacing: 0.08em;
+      line-height: 1.2;
+      color: var(--c1);
+      text-shadow: 2px 2px 0 #000;
+      text-align: center;
+    }
+    .panel .hint {
+      font: 400 var(--fs-body) / 1.55 var(--font-pixel);
+      color: var(--muted);
+      margin: 0 auto 16px;
+      max-width: 40rem;
+      text-align: center;
+    }
+
+    .donut-slice-pix {
+      filter: drop-shadow(0 0 8px rgba(89, 226, 253, 0.45));
+    }
+
+    .phase-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-top: 8px;
+      justify-content: center;
+    }
+    .phase-row-inline {
+      flex-wrap: wrap;
+      gap: 8px 10px;
+      margin-top: 4px;
+      justify-content: center;
+      align-items: flex-start;
+      overflow-x: visible;
+      overflow-y: visible;
+      padding: 4px 4px 10px;
+    }
+    .phase-block {
+      flex: 1;
+      min-width: 200px;
+      max-width: 300px;
+      border: 3px solid rgba(255, 255, 255, 0.12);
+      padding: 14px 10px;
+      background: rgba(8, 8, 8, 0.55);
+      cursor: pointer;
+      transition: transform 0.4s cubic-bezier(0.34, 1.45, 0.64, 1), border-color 0.3s, box-shadow 0.35s, background 0.3s;
+    }
+    .phase-block--strip {
+      flex: 1 1 22%;
+      min-width: min(168px, 46vw);
+      max-width: min(420px, 100%);
+      border: none;
+      padding: 8px 6px 10px;
+      background: transparent;
+      box-shadow: none;
+      overflow: visible;
+    }
+    .phase-block--strip.on {
+      background: rgba(252, 229, 0, 0.06);
+      box-shadow: none;
+      animation: none;
+    }
+    .phase-block--strip.on h3 { color: var(--c4); }
+    .phase-block--strip h3 {
+      font: 700 clamp(8px, 1vw, 10px) / 1.35 var(--font-pixel);
+      margin-bottom: 4px;
+      word-break: break-word;
+      hyphens: auto;
+    }
+    .phase-block--strip .meta {
+      font: 700 clamp(8px, 1vw, 10px) / 1.3 var(--font-pixel);
+      margin-bottom: 4px;
+    }
+    .phase-thumbs--strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(22px, 1fr));
+      gap: 3px 4px;
+      justify-items: center;
+      align-content: start;
+      max-height: none;
+      overflow: visible;
+      padding: 2px 0;
+    }
+    .phase-thumbs--strip img {
+      width: 22px;
+      height: 22px;
+      border-width: 1px;
+      flex-shrink: 0;
+    }
+    .panel-phase-strip .panel-inner--compact {
+      overflow: visible;
+    }
+    .phase-block:hover:not(.phase-block--strip) {
+      transform: translateY(-6px) scale(1.02);
+      border-color: rgba(89, 226, 253, 0.55);
+      box-shadow: 0 0 32px rgba(245, 69, 149, 0.2), 0 16px 40px rgba(0, 0, 0, 0.45);
+      background: rgba(16, 16, 20, 0.85);
+    }
+    .phase-block.phase-block--strip:hover {
+      transform: translateY(-2px);
+      background: rgba(20, 22, 28, 0.65);
+      box-shadow: none;
+      border-color: transparent;
+    }
+    .phase-block.on:not(.phase-block--strip) {
+      border-color: var(--c4);
+      box-shadow: 0 0 28px rgba(252, 229, 0, 0.25);
+      animation: phasePulse 2.2s ease-in-out infinite;
+    }
+    @keyframes phasePulse {
+      0%, 100% { box-shadow: 0 0 20px rgba(252, 229, 0, 0.2); }
+      50% { box-shadow: 0 0 36px rgba(252, 229, 0, 0.45); }
+    }
+    .phase-block.on h3 { color: var(--c4); }
+    .phase-block h3 {
+      font: 700 var(--fs-ui) / 1.3 var(--font-pixel);
+      margin-bottom: 8px;
+      letter-spacing: 0.06em;
+      text-align: center;
+    }
+    .phase-block .meta {
+      font: 700 clamp(12px, 1vw, 14px) / 1.35 var(--font-pixel);
+      color: var(--muted);
+      margin-bottom: 8px;
+      text-align: center;
+    }
+    .phase-thumbs { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+    .phase-thumbs img {
+      width: 40px; height: 40px; object-fit: cover; border: 2px solid rgba(255, 255, 255, 0.15);
+      image-rendering: pixelated;
+      transition: transform 0.3s cubic-bezier(0.34, 1.4, 0.64, 1), border-color 0.25s, box-shadow 0.3s;
+    }
+    .phase-thumbs img:hover {
+      transform: scale(1.2) rotate(-3deg);
+      border-color: var(--c1);
+      box-shadow: 0 0 14px rgba(89, 226, 253, 0.45);
+    }
+    .panel-phase-strip .panel-inner--compact .badge { margin-bottom: 6px; }
+    .panel-phase-strip .h2-compact {
+      font-size: clamp(16px, 2.2vw, 26px);
+      margin-bottom: 6px;
+    }
+    .panel-phase-strip .hint-compact {
+      font-size: clamp(10px, 1.05vw, 13px);
+      margin-bottom: 8px;
+      max-width: 36rem;
+    }
+
+    g.bee-thumb { cursor: pointer; }
+    g.bee-thumb image { image-rendering: pixelated; }
+
+    .charts {
+      display: flex;
+      flex-direction: column;
+      gap: clamp(56px, 9vh, 120px);
+      align-items: stretch;
+      width: 100%;
+      max-width: min(2304px, 100%);
+      margin: 0 auto;
+      overflow: visible;
+      box-sizing: border-box;
+      /* 避免滚动时与叙事显隐叠加产生持续重排与频闪 */
+      transition: none;
+    }
+    /* 叙事层已移到底部，charts 不再需要 padding-left */
+    .chart-panel {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      filter: none;
+      animation: chartPanelIn 0.72s cubic-bezier(0.22, 1, 0.36, 1) both;
+      animation-delay: var(--chart-d, 0s);
+    }
+    .chart-panel-split {
+      animation: none;
+      filter: none;
+      overflow: visible;
+      transition:
+        opacity 0.6s cubic-bezier(0.33, 1, 0.68, 1),
+        filter 0.6s cubic-bezier(0.33, 1, 0.68, 1),
+        transform 0.6s cubic-bezier(0.33, 1, 0.68, 1);
+    }
+    .chart-panel-split.chart-focus {
+      opacity: 1;
+      filter: none;
+      transform: scale(1.008);
+      pointer-events: auto;
+    }
+    .chart-panel-split.chart-dim {
+      opacity: 0.32;
+      filter: grayscale(0.25) brightness(0.82);
+      transform: scale(0.992);
+      pointer-events: none;
+    }
+    .chart-split-inner {
+      position: relative;
+      max-width: 100% !important;
+      width: 100%;
+      padding: 28px 18px 32px !important;
+      display: block;
+      overflow: visible;
+    }
+    /* ── 底部横条：数据总结平铺，避让左下「继续」与右侧进度点 ── */
+    #viz-side-dock {
+      position: fixed;
+      z-index: 8000;
+      left: max(12px, calc(var(--page-px) + var(--continue-reserve)));
+      right: max(12px, calc(var(--page-px) + 48px));
+      bottom: var(--dock-bottom-gap);
+      top: auto;
+      width: auto;
+      min-width: 0;
+      max-width: none;
+      transform: none;
+      display: block;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: none;
+    }
+    #viz-side-dock.visible {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transition: none;
+    }
+    #narrative-scroll-layer {
+      width: 100%;
+      box-sizing: border-box;
+    }
+    /* 数据总结：半透明冷色底 + 毛玻璃，非纯黑 */
+    .narr-window {
+      background: linear-gradient(165deg, rgba(42, 56, 98, 0.38) 0%, rgba(24, 32, 58, 0.5) 100%);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(130, 170, 230, 0.2);
+      border-left: 3px solid rgba(89, 226, 253, 0.45);
+      box-shadow: 0 -6px 28px rgba(30, 60, 120, 0.18);
+      position: relative;
+      padding-top: 0;
+      max-height: var(--narr-bar-max-h);
+      display: flex;
+      flex-direction: column;
+    }
+    .narr-window-body {
+      padding: 8px 12px 10px 12px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      align-items: flex-start;
+      gap: 14px 20px;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(180, 200, 240, 0.4) rgba(255, 255, 255, 0.06);
+    }
+    .narr-window-body::-webkit-scrollbar {
+      width: 8px;
+    }
+    .narr-window-body::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.06);
+      border-left: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .narr-window-body::-webkit-scrollbar-thumb {
+      background: rgba(180, 200, 240, 0.35);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    #narrative-scroll-layer .narr-label {
+      font: 700 12px/1.3 var(--font-pixel);
+      color: var(--c1);
+      letter-spacing: 0.12em;
+      margin-bottom: 0;
+      opacity: 0.9;
+      flex: 0 0 auto;
+      max-width: 4.5em;
+      padding-top: 2px;
+    }
+    #narrative-scroll-inner {
+      flex: 1 1 auto;
+      min-width: 0;
+      max-width: min(2200px, 100%);
+      margin-left: auto;
+      margin-right: auto;
+      font: 400 12px/1.65 var(--font-pixel);
+      color: #c6c6c6;
+      word-break: break-word;
+      text-align: left;
+      opacity: 1;
+      transform: none;
+      transform-origin: center bottom;
+      transition: none;
+    }
+    #narrative-scroll-inner .narr-btitle {
+      display: block;
+      font-weight: 700;
+      margin: 0.35em 0 0.15em;
+      color: #eee;
+    }
+    #narrative-scroll-inner .narr-btitle:first-child {
+      margin-top: 0;
+    }
+    #narrative-scroll-inner .narr-hl--y {
+      background: rgba(252, 229, 0, 0.35);
+      color: #fff;
+      padding: 0 3px;
+      font-weight: 700;
+    }
+    #narrative-scroll-inner .narr-hl--c {
+      background: rgba(89, 226, 253, 0.25);
+      color: #fff;
+      padding: 0 3px;
+    }
+    #narrative-scroll-inner .narr-hl--p {
+      background: rgba(245, 69, 149, 0.38);
+      color: #fff;
+      padding: 0 3px;
+    }
+    @media (min-width: 960px) {
+      #narrative-scroll-inner {
+        column-count: 2;
+        column-gap: 28px;
+        column-fill: balance;
+      }
+    }
+    /* 为底部数据条留出纵向空间 */
+    #charts.charts--narr-open {
+      padding-bottom: calc(var(--narr-bar-max-h) + 36px + var(--dock-bottom-gap));
+    }
+    /* 右侧进度块 + 英文标注，为图表区让出宽度 */
+    #charts.charts--stepper-open {
+      padding-right: min(132px, 20vw);
+    }
+    @media (max-width: 900px) {
+      #charts.charts--stepper-open {
+        padding-right: 0;
+      }
+      #viz-side-dock {
+        left: max(10px, calc(var(--page-px) + var(--continue-reserve)));
+        right: max(10px, calc(var(--page-px) + 44px));
+        bottom: var(--dock-bottom-gap);
+      }
+      .narr-window {
+        max-height: min(168px, 32vh);
+      }
+      .narr-window-body {
+        flex-direction: column;
+        gap: 6px;
+      }
+      #narrative-scroll-layer .narr-label {
+        max-width: none;
+      }
+      #narrative-scroll-inner {
+        column-count: 1;
+      }
+      #charts.charts--narr-open {
+        padding-bottom: calc(min(168px, 32vh) + 40px + var(--dock-bottom-gap));
+      }
+      .viz-snap-outro {
+        padding-bottom: calc(min(168px, 32vh) + 52px + var(--dock-bottom-gap));
+      }
+    }
+    /* ── 向下引导：白方块 + 灰色硬阴影 + 粉箭头 + 白字「继续」（与其它页面截屏一致） ── */
+    /* 与底部数据总结框垂直居中对齐（略上移，以图标高度约一半为基准） */
+    #scroll-guide-btn {
+      position: fixed;
+      left: var(--page-px);
+      bottom: calc(var(--dock-bottom-gap) + var(--narr-bar-max-h) * 0.5 - 52px);
+      z-index: 12000;
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 18px;
+      cursor: pointer;
+      background: transparent;
+      border: none;
+      padding: 0;
+      margin: 0;
+      opacity: 1;
+      transition: opacity 0.45s ease, transform 0.45s cubic-bezier(0.34, 1.45, 0.64, 1);
+      filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9));
+    }
+    #scroll-guide-btn.hidden {
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(16px);
+    }
+    #scroll-guide-btn .sgb-icon-box {
+      width: 58px;
+      height: 58px;
+      flex-shrink: 0;
+      background: #fff;
+      box-shadow: 10px 10px 0 #555;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      border: 2px solid #111;
+    }
+    #scroll-guide-btn .sgb-icon {
+      width: 40px;
+      height: 40px;
+      image-rendering: pixelated;
+      shape-rendering: crispEdges;
+    }
+    #scroll-guide-btn .sgb-text {
+      font: 700 clamp(18px, 1.35vw, 26px) / 1.1 var(--font-heading);
+      color: #fff;
+      letter-spacing: 0.12em;
+      text-shadow: 2px 2px 0 #000, -1px -1px 0 #000;
+      background: rgba(0, 0, 0, 0.78);
+      padding: 8px 16px 10px;
+      border: 2px solid rgba(255, 255, 255, 0.12);
+      box-sizing: border-box;
+    }
+    @keyframes sgbBounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(8px); }
+    }
+    @keyframes sgbIconPulse {
+      0%, 100% { box-shadow: 10px 10px 0 #555; }
+      50% { box-shadow: 12px 12px 0 #444; }
+    }
+    #scroll-guide-btn:not(.hidden) .sgb-icon-box {
+      animation: sgbIconPulse 1.8s steps(2, end) infinite;
+    }
+    #scroll-guide-btn:not(.hidden) { animation: sgbBounce 1.8s ease-in-out infinite; }
+    .chart-visual-centered {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 0 auto;
+      max-width: min(2200px, 99vw);
+      width: 100%;
+      min-width: 0;
+      opacity: 1;
+      transform: none;
+    }
+    .chart-visual-centered h3 {
+      text-align: center;
+      margin-left: auto;
+      margin-right: auto;
+      max-width: min(96vw, 2200px);
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      padding: 0 12px;
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+    }
+    .chart-visual-centered .subt {
+      text-align: center;
+      margin-left: auto;
+      margin-right: auto;
+      max-width: 48rem;
+    }
+    .chart-visual-centered .chart-host {
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+    }
+    .chart-panel-split.chart-snap-page .chart-visual-centered {
+      align-items: center;
+    }
+    .chart-heading-rail {
+      align-self: center;
+      width: 100%;
+      max-width: min(98vw, 2304px);
+      margin: 2px auto 6px;
+      padding: 0 clamp(12px, 2vw, 28px);
+      box-sizing: border-box;
+      text-align: center;
+    }
+    .chart-heading-rail h3 {
+      text-align: center;
+      margin: 0 auto 2px;
+      max-width: min(96vw, 2200px);
+    }
+    .chart-heading-rail .subt {
+      text-align: center;
+      margin: 0 auto;
+      max-width: 48rem;
+    }
+    .chart-row {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 28px 32px;
+      width: 100%;
+      max-width: min(2200px, 100%);
+      margin: 0 auto;
+    }
+    @media (min-width: 1024px) {
+      .chart-row {
+        flex-wrap: nowrap;
+      }
+    }
+    .chart-row-main {
+      flex: 1 1 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+    }
+    .chart-row-main .chart-host {
+      width: 100%;
+      min-height: min(960px, 88vh);
+    }
+    /* 图注：图一风 — 白底 + 右下硬阴影 + 顶栏像素按钮 */
+    .chart-figure-caption {
+      flex: 0 0 min(220px, 19vw);
+      width: min(220px, 19vw);
+      max-width: 100%;
+      min-width: 168px;
+      padding: 0;
+      box-sizing: border-box;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      align-self: center;
+    }
+    .fig-cap-window {
+      position: relative;
+      background: #fff;
+      border: 2px solid #111;
+      box-shadow: 8px 8px 0 #444;
+      padding-top: 16px;
+    }
+    .fig-cap-chrome {
+      position: absolute;
+      top: -2px;
+      left: 0;
+      right: 0;
+      height: 0;
+      pointer-events: none;
+    }
+    .fig-cap-win-btn {
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      top: -9px;
+      border: 2px solid #111;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font: 700 9px/1 var(--font-pixel);
+    }
+    .fig-cap-win-btn--back {
+      left: 6px;
+      background: #ee0;
+      color: #111;
+    }
+    .fig-cap-win-btn--heart {
+      right: 48px;
+      background: #e65a96;
+      color: #fff;
+      font-size: 8px;
+    }
+    .fig-cap-win-btn--refresh {
+      right: 26px;
+      background: #5c4ee6;
+      color: #fff;
+      font-size: 10px;
+    }
+    .fig-cap-win-btn--close {
+      right: 4px;
+      background: var(--c3);
+      color: #111;
+      font-size: 11px;
+      line-height: 1;
+    }
+    .fig-cap-body {
+      padding: 4px 8px 8px;
+    }
+    .chart-figure-caption .fig-cap-legend,
+    .chart-figure-caption .fig-cap-body {
+      font: 400 clamp(11px, 0.95vw, 13px) / 1.55 var(--font-pixel);
+      color: #111;
+    }
+    .fig-cap-legend { display: flex; flex-direction: column; gap: 3px; }
+    .fig-cap-row {
+      display: flex;
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 6px;
+    }
+    .fig-cap-swatch {
+      flex: 0 0 auto;
+      width: 10px;
+      height: 10px;
+      margin-top: 2px;
+      border: 1px solid #333;
+      box-sizing: border-box;
+    }
+    .fig-cap-label { flex: 1; min-width: 0; word-break: break-word; }
+    .fig-cap-foot {
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid #ccc;
+      color: #333;
+      font: 400 clamp(10px, 0.88vw, 12px) / 1.5 var(--font-pixel);
+      white-space: pre-line;
+    }
+    @media (max-width: 900px) {
+      .chart-row {
+        flex-direction: column;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .chart-figure-caption {
+        flex: 1 1 auto;
+        width: 100%;
+        min-width: 0;
+        max-width: min(40rem, 100%);
+        margin-top: 8px;
+      }
+      .fig-cap-foot { border-top-color: rgba(255, 255, 255, 0.1); }
+    }
+    @media (max-width: 960px) {
+      .phase-row-inline { flex-wrap: wrap; justify-content: center; }
+      .phase-block--strip { min-width: min(160px, 88vw); }
+      .viz-snap-phase-page #phases.phase-row-inline {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        max-width: none;
+      }
+      .viz-snap-phase-page #phases.phase-row-inline > .phase-block:first-child,
+      .viz-snap-phase-page #phases.phase-row-inline > .phase-block:nth-child(n) {
+        grid-column: unset;
+        grid-row: unset;
+      }
+      #scroll-guide-btn {
+        left: max(16px, env(safe-area-inset-left));
+        bottom: calc(var(--dock-bottom-gap) + min(168px, 32vh) * 0.5 - 52px);
+      }
+    }
+    @keyframes chartPanelIn {
+      from {
+        opacity: 0;
+        transform: translateY(32px) scale(0.97);
+        filter: blur(4px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        filter: blur(0);
+      }
+    }
+    .chart-panel .panel-inner {
+      width: 100%;
+      max-width: min(2200px, 100%);
+      padding: 22px 20px 28px;
+      border: 3px solid rgba(255, 255, 255, 0.1);
+      background: linear-gradient(165deg, rgba(18, 18, 22, 0.92) 0%, rgba(6, 6, 8, 0.75) 100%);
+      transition: border-color 0.4s, box-shadow 0.45s, transform 0.45s cubic-bezier(0.34, 1.35, 0.64, 1);
+    }
+    .chart-panel:hover .panel-inner {
+      border-color: rgba(89, 226, 253, 0.45);
+      box-shadow:
+        0 0 0 1px rgba(108, 88, 238, 0.3),
+        0 20px 50px rgba(0, 0, 0, 0.5),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      transform: scale(1.015);
+    }
+    /* 图表主体区：无渐变框，避免与右侧图注抢视觉；图注 .chart-figure-caption 单独保留渐变 */
+    .chart-panel.chart-panel-split .panel-inner.chart-split-inner {
+      position: relative;
+      border-radius: 0;
+      padding: 10px 6px 28px !important;
+      max-width: min(2200px, 100%);
+      box-sizing: border-box;
+      border: none;
+      background: transparent;
+      box-shadow: none;
+    }
+    .chart-panel.chart-panel-split .panel-inner.chart-split-inner > * {
+      position: relative;
+      z-index: 1;
+    }
+    .chart-panel.chart-panel-split:hover .panel-inner.chart-split-inner {
+      border: none;
+      box-shadow: none;
+      transform: none;
+    }
+    .chart-panel.z-left .panel-inner,
+    .chart-panel.z-right .panel-inner {
+      margin-left: auto;
+      margin-right: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .chart-panel.z-left h3,
+    .chart-panel.z-right h3,
+    .chart-panel.z-left .subt,
+    .chart-panel.z-right .subt {
+      text-align: center;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .chart-panel.z-left .chart-host,
+    .chart-panel.z-right .chart-host {
+      justify-content: center;
+      align-items: center;
+    }
+    .chart-panel h3 {
+      font-family: var(--font-heading);
+      font-size: clamp(24px, 2vw, 44px);
+      margin: 0 auto 6px;
+      color: #fff;
+      letter-spacing: 0.08em;
+      line-height: 1.2;
+      text-shadow: 2px 2px 0 #000;
+      text-align: center;
+    }
+    .chart-panel .subt {
+      font: 400 var(--fs-body) / 1.5 var(--font-pixel);
+      color: var(--muted);
+      margin: 0 auto 8px;
+      max-width: 48rem;
+      text-align: center;
+    }
+    .chart-svg { width: 100%; display: block; transition: filter 0.35s; }
+    .chart-panel:hover .chart-svg { filter: drop-shadow(0 0 12px rgba(252, 229, 0, 0.12)); }
+    .chart-host {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+      overflow-x: auto;
+    }
+    .chart-host .chart-svg {
+      opacity: 0;
+      transform: scale(0.58) translateY(64px);
+      filter: none;
+      flex-shrink: 0;
+      transition:
+        opacity var(--chart-svg-reveal) cubic-bezier(0.18, 0.82, 0.22, 1),
+        transform var(--chart-svg-reveal) cubic-bezier(0.18, 0.82, 0.22, 1);
+      will-change: opacity, transform;
+    }
+    .chart-host:not(.viz-chart-in) .chart-svg {
+      pointer-events: none;
+    }
+    .chart-host.viz-chart-in .chart-svg {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+    .chart-pixel-svg { overflow: visible; }
+    .chart-pixel-svg path, .chart-pixel-svg line, .chart-pixel-svg polyline, .chart-pixel-svg rect, .chart-pixel-svg circle {
+      shape-rendering: geometricPrecision;
+    }
+    /* 创新图表：悬停高亮 / 非焦点弱化 */
+    .chart-pixel-svg .s3-fade { transition: opacity 0.22s ease, filter 0.22s ease, stroke-width 0.18s ease; }
+    .chart-pixel-svg.s3-has-hover .s3-fade:not(.s3-focus) { opacity: 0.12; filter: grayscale(0.35); }
+    .chart-pixel-svg.s3-has-hover .s3-fade.s3-focus { opacity: 1; filter: drop-shadow(0 0 14px rgba(252, 229, 0, 0.42)); }
+    /* 弦图丝带不用 .s3-fade，避免条间移动时全局弱化规则造成频闪 */
+    .chart-pixel-svg path.chordrib { opacity: 1; }
+    .chart-pixel-svg.s3-has-hover path.chordrib:not(.s3-focus) { opacity: 0.32; }
+    .chart-pixel-svg.s3-has-hover path.chordrib.s3-focus { opacity: 1; filter: drop-shadow(0 0 10px rgba(89, 226, 253, 0.35)); }
+    .s3-ph-cell.s3-focus .s3-ph-hit { stroke: rgba(252, 229, 0, 0.45); stroke-width: 1.2px; }
+
+    /* 图 05 热力：格块描边过渡 + 悬停霓虹（不与全局 .s3-fade 冲突） */
+    .chart-pixel-svg.s3-chart--heatmap .s3-rs-heat .rsc {
+      transition: filter 0.22s ease, stroke 0.2s ease, stroke-width 0.2s ease, fill-opacity 0.2s ease;
+    }
+    .chart-pixel-svg.s3-chart--heatmap.s3-has-hover .s3-rs-heat .rsc:not(.s3-focus) {
+      opacity: 0.36;
+      filter: grayscale(0.22) brightness(0.78);
+    }
+    .chart-pixel-svg.s3-chart--heatmap.s3-has-hover .s3-rs-heat .rsc.s3-focus {
+      opacity: 1;
+      filter: drop-shadow(0 0 14px rgba(89, 226, 253, 0.55)) drop-shadow(0 0 28px rgba(108, 88, 238, 0.35));
+      stroke: rgba(252, 252, 255, 0.92) !important;
+      stroke-width: 1.65px !important;
+    }
+    /* 图 09 矩阵气泡：格底与圆 hover 层次 */
+    .chart-pixel-svg.s3-chart--matrix .mb-cell-bg { transition: stroke 0.2s ease, fill-opacity 0.2s ease; }
+    .chart-pixel-svg.s3-chart--matrix .mbds { transition: filter 0.22s ease, stroke-width 0.2s ease, fill-opacity 0.2s ease, opacity 0.22s ease; }
+    .chart-pixel-svg.s3-chart--matrix.s3-has-hover .mbds.s3-fade:not(.s3-focus) {
+      opacity: 0.4;
+      filter: grayscale(0.18) brightness(0.88);
+    }
+    .chart-pixel-svg.s3-chart--matrix.s3-has-hover .mbds.s3-focus {
+      opacity: 1;
+      filter: drop-shadow(0 0 12px rgba(252, 229, 0, 0.45)) drop-shadow(0 0 22px rgba(245, 69, 149, 0.28));
+      stroke-width: 1.35px;
+    }
+
+    /* ── 进度方框：页面右侧垂直居中（与底部数据总结分离） ── */
+    #chart-stepper {
+      position: fixed;
+      right: max(12px, calc(var(--page-px) - 6px));
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 7990;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: flex-end;
+      padding: 8px 0;
+      max-width: min(132px, 24vw);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition:
+        opacity var(--chart-svg-reveal) cubic-bezier(0.22, 1, 0.36, 1),
+        visibility 0s linear var(--chart-svg-reveal);
+    }
+    #chart-stepper.visible {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transition:
+        opacity var(--chart-svg-reveal) cubic-bezier(0.22, 1, 0.36, 1),
+        visibility 0s linear 0s;
+    }
+    .stepper-dot {
+      width: 12px;
+      height: 12px;
+      background: #222;
+      border: 2px solid #444;
+      cursor: pointer;
+      flex-shrink: 0;
+      justify-self: center;
+      transform-origin: center center;
+      transition:
+        background var(--chart-svg-reveal) cubic-bezier(0.22, 1, 0.36, 1),
+        border-color var(--chart-svg-reveal) cubic-bezier(0.22, 1, 0.36, 1),
+        transform var(--chart-svg-reveal) cubic-bezier(0.22, 1, 0.36, 1),
+        box-shadow var(--chart-svg-reveal) cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .stepper-dot:hover {
+      background: #666;
+      border-color: #888;
+      transform: scale(1.35);
+    }
+    .stepper-dot.active {
+      background: #e4009a;
+      border-color: #ffb8e8;
+      transform: scale(1.45);
+      box-shadow: 0 0 0 2px #111, 0 0 12px rgba(228, 0, 154, 0.45);
+    }
+    /* 固定第一列宽度，避免不同英文长度把圆点挤成折线 */
+    .stepper-item {
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr);
+      column-gap: 8px;
+      align-items: center;
+      width: 100%;
+    }
+    .stepper-label {
+      font: 400 8px/1.25 var(--font-pixel);
+      color: #7a7a8a;
+      text-align: left;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      letter-spacing: 0.02em;
+    }
+    .stepper-item:has(.stepper-dot.active) .stepper-label,
+    .stepper-item--active .stepper-label {
+      color: #ffb8e8;
+    }
+    /* ── 图表区间顶部 sticky 编号条 ── */
+    .chart-sticky-header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 4px 0 6px;
+      margin-bottom: 0;
+      background: rgba(0,0,0,0.82);
+      border-bottom: 1px solid #1e1e1e;
+      backdrop-filter: blur(2px);
+    }
+    .chart-sticky-num {
+      font: 700 clamp(11px, 0.9vw, 14px) / 1 var(--font-pixel);
+      color: var(--c4);
+      letter-spacing: 0.14em;
+      min-width: 32px;
+      flex-shrink: 0;
+    }
+    .chart-sticky-title {
+      font: 400 clamp(11px, 0.88vw, 15px) / 1 var(--font-heading);
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+    }
+    /* ── 图表入场额外 stagger 动效（pudding.cool 风格） ── */
+    .chart-panel-split .chart-visual-centered {
+      transition: opacity 0.55s cubic-bezier(0.22, 1, 0.36, 1), transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .chart-panel-split:not(.chart-focus) .chart-visual-centered {
+      opacity: 0.92;
+    }
+    /* ── 图表区横线分隔（编辑风） ── */
+    .chart-panel-split + .chart-panel-split {
+      border-top: 1px solid #191919;
+    }
+
+    footer.foot {
+      text-align: center;
+      padding: 28px 16px;
+      font: 400 var(--fs-body) / 1.6 var(--font-pixel);
+      color: #666;
+      border: none;
+      margin-top: 24px;
+      max-width: 40rem;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .hero-pixel {
+      position: relative;
+      z-index: 15;
+      min-height: min(58vh, 520px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px 48px;
+      margin: 0 -20px 16px;
+      background: transparent;
+      border-bottom: none;
+      pointer-events: auto;
+      /* 空白区域允许页面纵向滚动；立方体上由 JS 单独处理滚轮 */
+      touch-action: pan-y pinch-zoom;
+    }
+    .hero-pixel::before { display: none; }
+    .hero-scroll-hint {
+      position: relative;
+      z-index: 2;
+      font: 400 var(--fs-body) / 1.55 var(--font-pixel);
+      color: #888;
+      letter-spacing: 0.08em;
+      margin-bottom: 32px;
+      text-align: center;
+      max-width: min(640px, 92vw);
+      animation: heroHintBlink 2.4s steps(2, end) infinite;
+    }
+    @keyframes heroHintBlink { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+    .cube-stage {
+      position: relative;
+      z-index: 2;
+      width: 100%;
+      max-width: min(96vw, 1100px);
+      min-height: min(44vh, 440px);
+      padding: 12px 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      perspective: min(1600px, 140vw);
+      perspective-origin: 50% 45%;
+      pointer-events: auto;
+      overscroll-behavior: contain;
+    }
+    .cube-pivot {
+      --cube-s: min(52vmin, 62vw, 420px);
+      width: var(--cube-s);
+      height: var(--cube-s);
+      position: relative;
+      transform-style: preserve-3d;
+      transform: rotateX(calc(var(--cube-tilt, -12deg) + var(--cube-rx, 0deg))) rotateY(calc(var(--cube-ry, 0deg) + var(--cube-ry-mouse, 0deg)));
+      transform-origin: 50% 50%;
+      will-change: transform;
+      pointer-events: auto;
+      cursor: grab;
+      touch-action: none;
+      overscroll-behavior: contain;
+    }
+    .cube-face {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      box-sizing: border-box;
+      overflow: hidden;
+      backface-visibility: hidden;
+      -webkit-font-smoothing: none;
+      image-rendering: pixelated;
+    }
+    .cube-face.side {
+      background: #070707;
+      border: 4px solid #f0f0f0;
+      box-shadow:
+        inset 0 0 0 2px #2a2a2a,
+        inset 0 0 36px rgba(255, 255, 255, 0.05),
+        0 0 0 1px #000;
+    }
+    .cube-face::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.18;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E");
+      mix-blend-mode: overlay;
+    }
+    .cube-face.front,
+    .cube-face.right,
+    .cube-face.back,
+    .cube-face.left {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      gap: 6px;
+      padding: 8px 10px;
+      color: #eee;
+    }
+    .cube-thumb {
+      flex: 1 1 auto;
+      margin-top: auto;
+      padding-top: 4px;
+      align-self: center;
+      width: 94%;
+      min-height: 72px;
+      max-height: 56%;
+      background: #e8e8e8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 2px solid rgba(255, 255, 255, 0.35);
+      box-sizing: border-box;
+      position: relative;
+      z-index: 1;
+      overflow: hidden;
+    }
+    .cube-face.side:has(.cube-thumb)::after {
+      opacity: 0.12;
+    }
+    .cube-face-img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      object-position: center center;
+      pointer-events: none;
+      image-rendering: auto;
+      position: relative;
+      z-index: 1;
+    }
+    .cube-face .face-num {
+      flex: 0 0 auto;
+      font-family: var(--font-heading);
+      font-size: clamp(11px, calc(var(--cube-s) * 0.028), 14px);
+      color: #fff;
+      margin: 0;
+      padding-bottom: 6px;
+      border-bottom: 2px solid rgba(255,255,255,.45);
+      letter-spacing: 0.06em;
+      line-height: 1.35;
+      text-shadow: 1px 1px 0 #000;
+    }
+    .cube-face .cube-text {
+      flex: 0 1 auto;
+      min-height: 0;
+      max-height: 38%;
+      font-family: var(--font-pixel);
+      font-weight: 700;
+      font-size: clamp(10px, calc(var(--cube-s) * 0.032), 15px);
+      line-height: 1.38;
+      letter-spacing: 0.02em;
+      text-align: justify;
+      text-justify: inter-ideograph;
+      word-break: break-word;
+      overflow: hidden;
+      color: #eaeaea;
+      text-shadow: 1px 1px 0 #000, -1px -1px 0 #000;
+    }
+    .cube-face.cap-top,
+    .cube-face.cap-bottom {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px;
+      background: #0c0c0c;
+      border: 4px solid #888;
+      font-family: var(--font-heading);
+      font-size: clamp(12px, calc(var(--cube-s) * 0.032), 18px);
+      color: #777;
+      letter-spacing: 0.35em;
+      box-shadow: inset 0 0 20px rgba(0,0,0,.8);
+    }
+    .cube-face.cap-top { color: #999; border-color: #aaa; }
+    .cube-face.side {
+      width: var(--cube-s);
+      height: var(--cube-s);
+      margin-left: calc(var(--cube-s) / -2);
+      margin-top: calc(var(--cube-s) / -2);
+    }
+    .cube-face.front  { transform: rotateY(0deg) translateZ(calc(var(--cube-s) / 2)); }
+    .cube-face.back   { transform: rotateY(180deg) translateZ(calc(var(--cube-s) / 2)); }
+    .cube-face.right  { transform: rotateY(90deg) translateZ(calc(var(--cube-s) / 2)); }
+    .cube-face.left   { transform: rotateY(-90deg) translateZ(calc(var(--cube-s) / 2)); }
+    .cube-face.cap-top { transform: rotateX(90deg) translateZ(calc(var(--cube-s) / 2)); }
+    .cube-face.cap-bottom { transform: rotateX(-90deg) translateZ(calc(var(--cube-s) / 2)); }
+    @media (max-width: 640px) {
+      .cube-pivot { --cube-s: min(72vw, 240px); }
+      .cube-face.front, .cube-face.right, .cube-face.back, .cube-face.left { padding: 6px 8px; }
+      .cube-thumb { max-height: 52%; width: 94%; min-height: 64px; }
+      .cube-face .cube-text { max-height: 34%; font-size: clamp(9px, calc(var(--cube-s) * 0.03), 13px); }
+      .hero-pixel { min-height: 56vh; touch-action: pan-y pinch-zoom; }
+    }
+
+    header.top h1.pix-load {
+      font-family: var(--font-heading);
+      font-size: var(--fs-title-max);
+      line-height: 1.2;
+      color: #fff;
+      text-shadow: 2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+      letter-spacing: 0.06em;
+    }
+    header.top h1.pix-load .pixel-reveal-char,
+    header.top p.sub.pix-load-sub .pixel-reveal-char {
+      font-family: var(--font-heading);
+    }
+    header.top .stat .pixel-reveal-char {
+      font-family: var(--font-pixel);
+    }
+    .badge {
+      font-family: var(--font-heading) !important;
+    }
+
+    .s2-grid-dim .s2-grid-thumb { opacity: 0.16; }
+    .s2-grid-dim .s2-grid-thumb.hl { opacity: 1; }
+    .s2-grid-thumb { transition: opacity 0.22s ease, filter 0.22s ease; }
+    .s2-grid-thumb.hl { filter: brightness(1.06); }
+    </style>
+</head>
+<body>
+  <div id="progress"></div>
+  <div class="halftone-bg" aria-hidden="true"></div>
+  <div id="viz-side-dock" class="viz-side-dock" aria-live="polite" aria-label="数据总结">
+    <div id="narrative-scroll-layer">
+      <div class="narr-window">
+        <div class="narr-window-body">
+          <div class="narr-label">数据总结</div>
+          <div id="narrative-scroll-inner"></div>
+    </div>
+    </div>
+    </div>
+  </div>
+  <nav id="chart-stepper" aria-label="图表进度"></nav>
+
+  <button type="button" id="scroll-guide-btn" aria-label="继续向下浏览" title="继续向下浏览">
+    <span class="sgb-icon-box" aria-hidden="true">
+      <svg class="sgb-icon" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+        <rect x="4"  y="8"  width="4" height="4" fill="#f54595"/>
+        <rect x="28" y="8"  width="4" height="4" fill="#f54595"/>
+        <rect x="8"  y="12" width="4" height="4" fill="#f54595"/>
+        <rect x="24" y="12" width="4" height="4" fill="#f54595"/>
+        <rect x="12" y="16" width="4" height="4" fill="#f54595"/>
+        <rect x="20" y="16" width="4" height="4" fill="#f54595"/>
+        <rect x="16" y="20" width="4" height="4" fill="#f54595"/>
+      </svg>
+    </span>
+    <span class="sgb-text">继续</span>
+  </button>
+  <div id="tip"></div>
+  <aside class="filters-dock" id="filters-dock" aria-label="筛选条件">
+    <div class="filters-dock-title">筛选条件</div>
+    <div class="filters" id="filters-bar"></div>
+    <span class="filters-dock-arrow" aria-hidden="true">➤</span>
+  </aside>
+
+    <div class="app">
+    <main class="app-main-snap">
+    <script>
+      (function (w) {
+        var CUBE_PH =
+          "data:image/svg+xml;charset=utf-8," +
+          encodeURIComponent(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200"><rect fill="#16161c" width="200" height="200"/><rect x="10" y="10" width="180" height="180" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="1" stroke-dasharray="5 5"/><text x="100" y="104" fill="#5a5a68" font-size="12" font-family="CLFN16,monospace" text-anchor="middle">图片未找到</text></svg>'
+          );
+        w.s3CubeFaceError = function (img) {
+          if (!img || !img.getAttribute) return;
+          var fn = img.getAttribute("data-cube-file");
+          if (!fn) return;
+          var step = parseInt(img.getAttribute("data-cube-step") || "0", 10);
+          /* 首地址已是 对应图片3/，避免 step0 再次指向同一路径导致死循环 */
+          var urls = [
+            "../数据/场景三/对应图片3/" + fn,
+            "对应图片3/" + encodeURIComponent(fn),
+            "../数据/场景三/对应图片3/" + encodeURIComponent(fn)
+          ];
+          if (step < urls.length) {
+            img.setAttribute("data-cube-step", String(step + 1));
+            img.src = urls[step];
+            return;
+          }
+          img.onerror = null;
+          img.src = CUBE_PH;
+        };
+      })(window);
+    </script>
+    <div class="viz-snap-page viz-snap-intro">
+    <section class="hero-pixel" aria-label="开场立方体">
+      <div class="cube-stage">
+        <div class="cube-pivot" id="pixelCube" style="--cube-ry: 0deg;">
+          <div class="cube-face front side">
+            <div class="face-num">① 场景三·直接性与包装</div>
+            <div class="cube-text">间接表达占多数；包装度多在 2—5 档，把真实情绪折成梗、礼貌壳或自嘲句式，适配当下群聊与评论区语境。</div>
+            <div class="cube-thumb">
+              <img class="cube-face-img" data-cube-file="228.png" src="对应图片3/228.png" onerror="s3CubeFaceError(this)" alt="" decoding="async" />
+                </div>
+                </div>
+          <div class="cube-face right side">
+            <div class="face-num">② 场景三·细分阶段</div>
+            <div class="cube-text">从场景萌芽、关系分层到礼貌化与情绪包装，再到婉拒与万能模板：阶段越靠后，字数与修辞负担往往越高。</div>
+            <div class="cube-thumb">
+              <img class="cube-face-img" data-cube-file="32.png" src="对应图片3/32.png" onerror="s3CubeFaceError(this)" alt="" decoding="async" />
+            </div>
+                </div>
+          <div class="cube-face back side">
+            <div class="face-num">③ 场景三·社交功能</div>
+            <div class="cube-text">轻吐槽、围观附和、自嘲摆烂、阴阳怪气等功能标签并存；同一张脸可在不同功能间切换，承担接话、缓冲或软攻击。</div>
+            <div class="cube-thumb">
+              <img class="cube-face-img" data-cube-file="92.png" src="对应图片3/92.png" onerror="s3CubeFaceError(this)" alt="" decoding="async" />
+            </div>
+                    </div>
+          <div class="cube-face left side">
+            <div class="face-num">④ 场景三·关系与风险</div>
+            <div class="cube-text">同学/同事与陌生网友占比高；高风险多与边界、婉拒或攻击性话术同现，可结合堆叠条观察各关系下的风险构成。</div>
+            <div class="cube-thumb">
+              <img class="cube-face-img" data-cube-file="133.png" src="对应图片3/133.png" onerror="s3CubeFaceError(this)" alt="" decoding="async" />
+                </div>
+                    </div>
+          <div class="cube-face cap-top side">▓▒░</div>
+          <div class="cube-face cap-bottom side">░▒▓</div>
+                </div>
+        </div>
+      <p class="hero-scroll-hint">光标在立方体上时滚轮旋转立方体；在空白处滚轮可正常滚动页面</p>
+    </section>
+        </div>
+
+    <div class="viz-snap-page viz-snap-phase-page">
+    <div class="layout">
+      <section class="panel panel-phase-strip">
+        <div class="panel-inner panel-inner--compact">
+          <span class="badge">阶段</span>
+          <h2 class="h2-compact">细分阶段（场景三）</h2>
+          <p class="hint hint-compact">含「全部展示」与六个细分阶段；点击项筛选细分阶段；缩略图悬停显示图内文字。</p>
+          <div id="phases" class="phase-row phase-row-inline"></div>
+        </div>
+      </section>
+    </div>
+        </div>
+
+    <div class="viz-main-charts">
+      <div class="charts" id="charts"></div>
+        </div>
+
+    <div class="viz-snap-page viz-snap-outro">
+      <footer class="foot">场景三样本聚焦「当下」熊猫头用法：间接表达、礼貌壳、社交功能与关系风险。</footer>
+      <div class="phase-nav-wrap">
+        <a class="phase-nav-btn" href="场景一.html">进入下一阶段</a>
+      </div>
+    </div>
+    </main>
+    </div>
+
+  <script src="scene3_data.js"></script>
+    <script>
+(function () {
+  const F = {
+    大阶段: "大阶段", 细分: "细分阶段", 当前图片: "当前图片", 原文件名: "原文件名", 图字: "图片文字",
+    复杂度: "视觉复杂度", 字数: "文字字数", 黑白: "黑白/彩色", 情绪: "情绪判断", 动作: "动作特征",
+    场景: "社交场景判断", 直接: "表达直接性", 包装: "包装程度", 原情: "原始情绪类型", 包后: "包装后的表达类型",
+    关系: "关系对象类型", 风险: "关系风险等级", 社交: "社交功能分类", 真实: "贴近真实情绪程度指数", 图片: "缩略图"
+  };
+const FILTER_KEYS = [
+    F.大阶段, F.细分, F.复杂度, F.字数, F.黑白, F.情绪, F.动作, F.场景, F.直接, F.包装, F.原情, F.包后, F.关系, F.风险, F.社交
+  ];
+  const PAL = ["#F54595", "#59E2FD", "#6C58EE", "#FCE500"];
+  const PAL_LEGEND = ["粉洋红", "青色", "紫色", "黄色"];
+  /** 逐字显现：相邻字符延迟（秒），越小越快 */
+  const PIX_CHAR_STAGGER = 0.0065;
+  /** 右侧图注专用：更短间隔 */
+  const PIX_CAP_STAGGER = 0.0018;
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  /** 优先与 场景三.html 同目录的 对应图片3/；失败时回退 data-img-alt（见立方体与阶段条脚本） */
+  const IMG_BASE = "对应图片3/";
+  const IMG_BASE_ALT = "../数据/场景三/对应图片3/";
+  /** 坐标区：主网格 + 细网格（与场景一对齐，略提亮细格便于加密后仍可读） */
+  const CHART_GRID_STROKE = "rgba(255,255,255,0.44)";
+  const CHART_GRID_W = 0.72;
+  const CHART_GRID_FINE = "rgba(255,255,255,0.15)";
+  const CHART_GRID_FINE_W = 0.28;
+  const CHART_AXIS_DOMAIN_STROKE = "rgba(255,255,255,0.68)";
+  const CHART_AXIS_TICK_STROKE = "rgba(255,255,255,0.5)";
+  const CHART_AXIS_TICK_W = 0.78;
+
+  function revealStrokeLine(sel, dur, delay) {
+    const dMs = dur == null ? 620 : dur;
+    const dDel = delay == null ? 0 : delay;
+    sel.each(function () {
+      const node = this;
+      if (typeof node.getTotalLength === "function") {
+        try {
+          const len = node.getTotalLength();
+          if (len > 0) {
+            d3.select(node)
+              .attr("stroke-dasharray", len + " " + len)
+              .attr("stroke-dashoffset", len)
+              .transition()
+              .delay(dDel)
+              .duration(dMs)
+              .ease(d3.easeCubicOut)
+              .attr("stroke-dashoffset", 0);
+            return;
+          }
+        } catch (er) { /* fallthrough */ }
+      }
+      d3.select(node).attr("opacity", 0)
+        .transition().delay(dDel).duration(320).ease(d3.easeCubicOut).attr("opacity", 1);
+    });
+  }
+
+  function revealCircleStroke(sel, r, dur, delay) {
+    const len = 2 * Math.PI * r;
+    const dMs = dur == null ? 720 : dur;
+    const dDel = delay == null ? 0 : delay;
+    sel.attr("fill", "none")
+      .attr("stroke-dasharray", len + " " + len)
+      .attr("stroke-dashoffset", len)
+      .transition()
+      .delay(dDel)
+      .duration(dMs)
+      .ease(d3.easeCubicOut)
+      .attr("stroke-dashoffset", 0);
+  }
+
+  function animateAxisStrokeLines(axisG, stagger0) {
+    let k = 0;
+    const s0 = stagger0 == null ? 0 : stagger0;
+    axisG.selectAll(".domain").each(function () {
+      revealStrokeLine(d3.select(this), 680, s0 + k * 45);
+      k++;
+    });
+    axisG.selectAll(".tick line").each(function () {
+      revealStrokeLine(d3.select(this), 480, s0 + k * 18);
+      k++;
+    });
+  }
+
+  function fadeAxisTexts(axisG, baseDelay) {
+    const t0 = baseDelay == null ? 200 : baseDelay;
+    axisG.selectAll("text").attr("opacity", 0)
+      .transition()
+      .delay((_, i) => t0 + i * 12)
+      .duration(380)
+      .ease(d3.easeCubicOut)
+      .attr("opacity", 1);
+  }
+
+  function safeHex(c) {
+    const s = String(c || "");
+    return /^#[0-9A-Fa-f]{6}$/.test(s) ? s : "#888888";
+  }
+
+  /** 柱状/条带用横向光泽渐变（objectBoundingBox） */
+  function chartBarGradientUrl(defs, uniqueId, hex) {
+    const base = safeHex(hex);
+    const id = "bgrad_" + String(uniqueId).replace(/\W/g, "_");
+    const gg = defs.append("linearGradient")
+      .attr("id", id)
+      .attr("gradientUnits", "objectBoundingBox")
+      .attr("x1", "0%").attr("y1", "50%").attr("x2", "100%").attr("y2", "50%");
+    let c0, c1, c2;
+    try {
+      const C = d3.color(base);
+      if (C) {
+        c0 = C.copy({ r: C.r * 0.42, g: C.g * 0.42, b: C.b * 0.42 }).formatHex();
+        c1 = C.brighter(0.65).formatHex();
+        c2 = C.formatHex();
+      } else throw new Error("x");
+    } catch (e1) {
+      c0 = "#1a1a22";
+      c1 = base;
+      c2 = base;
+    }
+    gg.append("stop").attr("offset", "0%").attr("stop-color", c0);
+    gg.append("stop").attr("offset", "42%").attr("stop-color", c1);
+    gg.append("stop").attr("offset", "100%").attr("stop-color", c2);
+    return "url(#" + id + ")";
+  }
+
+  function gridMidpointsBetween(arr) {
+    const out = [];
+    for (let i = 0; i < arr.length; i++) {
+      out.push(arr[i]);
+      if (i < arr.length - 1) out.push((arr[i] + arr[i + 1]) / 2);
+    }
+    return out;
+  }
+
+  function gridDenseBetween(arr) {
+    return gridMidpointsBetween(gridMidpointsBetween(arr));
+  }
+
+  function pixelRevealCaptionPlainText(el, text, delayOffset) {
+    if (!el) return;
+    const off = delayOffset == null ? 0 : delayOffset;
+    el.textContent = "";
+    const lines = String(text).split("\n");
+    let idx = 0;
+    lines.forEach(function (line, li) {
+      if (li) el.appendChild(document.createElement("br"));
+      for (let ci = 0; ci < line.length; ci++) {
+        const ch = line[ci];
+        const s = document.createElement("span");
+        s.className = "pixel-reveal-char pixel-reveal-char--cap";
+        s.textContent = ch === " " ? "\u00A0" : ch;
+        s.style.animationDelay = (off + idx * PIX_CAP_STAGGER) + "s";
+        idx++;
+        el.appendChild(s);
+      }
+    });
+  }
+
+  function figCapAppendChrome(win) {
+    const chrome = document.createElement("div");
+    chrome.className = "fig-cap-chrome";
+    chrome.setAttribute("aria-hidden", "true");
+    chrome.innerHTML =
+      '<span class="fig-cap-win-btn fig-cap-win-btn--back">←</span>' +
+      '<span class="fig-cap-win-btn fig-cap-win-btn--heart">♥</span>' +
+      '<span class="fig-cap-win-btn fig-cap-win-btn--refresh">↻</span>' +
+      '<span class="fig-cap-win-btn fig-cap-win-btn--close">×</span>';
+    win.appendChild(chrome);
+  }
+
+  function setFigCaption(container, text) {
+    if (!container || !container.closest) return;
+    const row = container.closest(".chart-row");
+    if (!row) return;
+    const cap = row.querySelector(".chart-figure-caption");
+    if (cap) {
+      cap.innerHTML = "";
+      if (text) {
+        const win = document.createElement("div");
+        win.className = "fig-cap-window";
+        figCapAppendChrome(win);
+        const body = document.createElement("div");
+        body.className = "fig-cap-body";
+        const p = document.createElement("p");
+        p.className = "fig-cap-foot";
+        p.style.borderTop = "none";
+        p.style.marginTop = "0";
+        p.style.paddingTop = "0";
+        p.textContent = text;
+        body.appendChild(p);
+        win.appendChild(body);
+        cap.appendChild(win);
+        requestAnimationFrame(function () {
+          const t = text;
+          p.textContent = "";
+          pixelRevealCaptionPlainText(p, t, 0);
+        });
+      }
+    }
+  }
+
+  /** 右侧图注：图一风白窗 + 色块说明 */
+  function setFigCaptionLegend(container, items, footnote) {
+    if (!container || !container.closest) return;
+    const row = container.closest(".chart-row");
+    if (!row) return;
+    const cap = row.querySelector(".chart-figure-caption");
+    if (!cap) return;
+    cap.innerHTML = "";
+    const win = document.createElement("div");
+    win.className = "fig-cap-window";
+    figCapAppendChrome(win);
+    const body = document.createElement("div");
+    body.className = "fig-cap-body";
+    const leg = document.createElement("div");
+    leg.className = "fig-cap-legend";
+    (items || []).forEach(function (it) {
+      const r = document.createElement("div");
+      r.className = "fig-cap-row";
+      const sw = document.createElement("span");
+      sw.className = "fig-cap-swatch";
+      sw.style.background = safeHex(it.hex);
+      const lb = document.createElement("span");
+      lb.className = "fig-cap-label";
+      lb.textContent = it.text || "";
+      r.appendChild(sw);
+      r.appendChild(lb);
+      leg.appendChild(r);
+    });
+    body.appendChild(leg);
+    if (footnote) {
+      const ft = document.createElement("p");
+      ft.className = "fig-cap-foot";
+      ft.textContent = footnote;
+      body.appendChild(ft);
+    }
+    win.appendChild(body);
+    cap.appendChild(win);
+    requestAnimationFrame(function () {
+      const rowDelay = 0.0035;
+      cap.querySelectorAll(".fig-cap-label").forEach(function (lb, i) {
+        const t = lb.textContent;
+        if (!t || lb.querySelector(".pixel-reveal-char")) return;
+        lb.textContent = "";
+        pixelRevealCaptionPlainText(lb, t, i * rowDelay);
+      });
+      const ft = cap.querySelector(".fig-cap-foot");
+      if (ft && ft.textContent && !ft.querySelector(".pixel-reveal-char")) {
+        const tf = ft.textContent;
+        ft.textContent = "";
+        pixelRevealCaptionPlainText(ft, tf, (items || []).length * rowDelay + 0.006);
+      }
+    });
+  }
+
+  function captionSampleLine(rows) {
+    return "【数据范围】随顶栏筛选变化，本图当前有效样本 " + rows.length + " 条。";
+  }
+  const IMG_PLACEHOLDER = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+  const CHART_W = 2000;
+  const CHART_W_SNAP = 2304;
+  const chartBoxW = (el, cap) => {
+    const snap = el && el.closest(".chart-snap-page");
+    const maxW = cap != null ? cap : (snap ? CHART_W_SNAP : CHART_W);
+    const row = el && el.closest(".chart-row-main");
+    const rowW = row && row.clientWidth > 0 ? row.clientWidth : 0;
+    let raw = (el && el.clientWidth) || 0;
+    if (rowW > 0) raw = Math.min(raw > 0 ? raw : rowW, rowW);
+    else if (raw < 160) raw = Math.min((typeof innerWidth !== "undefined" ? innerWidth : 800) - 80, maxW);
+    return Math.min(Math.max(raw, 120), maxW);
+  };
+
+  /**
+   * 滚入视口：每次进入都 full draw，保证 D3 动效可重播（上滑回看也能再播）。
+   * 滚出：仅当完全离开视口（!isIntersecting）才淡出，避免比例在阈值间抖动时误触发。
+   */
+  function attachChartOnView(panelEl, host, draw) {
+    if (!panelEl || !host) return;
+    host.innerHTML = "";
+    host.classList.remove("viz-chart-in");
+    delete host.dataset.vizRevealed;
+    var inView = false;
+    function hideChart() {
+      host.classList.remove("viz-chart-in");
+    }
+    function playEntrance(needFullDraw) {
+      host.classList.remove("viz-chart-in");
+      void host.offsetWidth;
+      if (needFullDraw) {
+        host.innerHTML = "";
+        delete host.dataset.vizRevealed;
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+          try {
+            draw(host);
+          } catch (err) {}
+          revealChartSvgTexts(host);
+          requestAnimationFrame(function () {
+            host.classList.add("viz-chart-in");
+            try {
+              host.dispatchEvent(new CustomEvent("chartvizinstart", { bubbles: true }));
+            } catch (e3) {}
+          });
+          });
+        });
+      } else {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            host.classList.add("viz-chart-in");
+            try {
+              host.dispatchEvent(new CustomEvent("chartvizinstart", { bubbles: true }));
+            } catch (e4) {}
+          });
+        });
+      }
+    }
+    try {
+      var io = new IntersectionObserver(
+        function (ents) {
+          ents.forEach(function (e) {
+            var r = e.intersectionRatio;
+            var show = e.isIntersecting && r >= 0.14;
+            if (show && !inView) {
+              inView = true;
+              playEntrance(true);
+            } else if (!e.isIntersecting && inView) {
+              inView = false;
+              hideChart();
+            }
+          });
+        },
+        { root: null, threshold: [0, 0.08, 0.14, 0.35, 0.65, 1], rootMargin: "0px 0px -6% 0px" }
+      );
+      io.observe(panelEl);
+    } catch (err) {
+      playEntrance(true);
+    }
+  }
+
+  /** 读 CSS --chart-svg-reveal：略短于整段淡入，让数据动效稍早出现（比「等满 1.7s」更跟手） */
+  function chartSvgRevealDelayMs() {
+    try {
+      var raw = getComputedStyle(document.documentElement).getPropertyValue("--chart-svg-reveal").trim();
+      var sec = parseFloat(raw);
+      if (!isNaN(sec) && sec > 0) return Math.max(620, Math.floor(sec * 1000 * 0.58) + 20);
+    } catch (e1) {}
+    return 1000;
+  }
+
+  /**
+   * chartvizinstart 触发时图表仍在 opacity 0→1（约 1.7s），若立刻跑 D3 用户几乎看不见。
+   * 在事件后再延迟 chartSvgRevealDelayMs()，等入场结束后再播数据动效。
+   */
+  function runWhenChartSvgVisible(host, fn) {
+    var done = false;
+    function run() {
+      if (done) return;
+      done = true;
+      try {
+        fn();
+      } catch (e0) {}
+    }
+    var d = chartSvgRevealDelayMs();
+    var fb = setTimeout(run, d + 4000);
+    if (!host || typeof host.addEventListener !== "function") {
+      setTimeout(run, d);
+      return;
+    }
+    host.addEventListener(
+      "chartvizinstart",
+      function () {
+        clearTimeout(fb);
+        setTimeout(run, d);
+      },
+      { once: true }
+    );
+  }
+
+  let ALL = [];
+  const filters = Object.fromEntries(FILTER_KEYS.map(k => [k, null]));
+  let textBin = null;
+
+  function norm(s) { return String(s == null ? "" : s).trim(); }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"); }
+
+  /** 将纯文本拆成逐字 span，带像素风模糊→清晰动画 */
+  function pixelRevealPlainText(el, text, delayOffset) {
+    if (!el) return;
+    const off = delayOffset == null ? 0 : delayOffset;
+    el.textContent = "";
+    const lines = String(text).split("\n");
+    let idx = 0;
+    lines.forEach((line, li) => {
+      if (li) el.appendChild(document.createElement("br"));
+      for (const ch of line) {
+        const s = document.createElement("span");
+        s.className = "pixel-reveal-char";
+        s.textContent = ch === " " ? "\u00A0" : ch;
+        s.style.animationDelay = (off + idx * PIX_CHAR_STAGGER) + "s";
+        idx++;
+        el.appendChild(s);
+      }
+    });
+  }
+
+  /** SVG <text> 内逐字 tspan 显现（图表轴标签、图内说明等） */
+  function pixelRevealSvgText(el, delayOffset) {
+    if (!el || el.localName !== "text") return;
+    if (el.querySelector("tspan.pixel-reveal-char")) return;
+    const line = String(el.textContent || "").replace(/\n/g, " ");
+    if (!line.trim()) return;
+    el.textContent = "";
+    const off = delayOffset == null ? 0 : delayOffset;
+    let idx = 0;
+    for (const ch of line) {
+      const ts = document.createElementNS(SVG_NS, "tspan");
+      ts.setAttribute("class", "pixel-reveal-char");
+      ts.textContent = ch === " " ? "\u00A0" : ch;
+      ts.style.animationDelay = (off + idx * PIX_CHAR_STAGGER) + "s";
+      el.appendChild(ts);
+      idx++;
+    }
+  }
+
+  function revealChartSvgTexts(host) {
+  if (!host) return;
+    var texts = host.querySelectorAll(".chart-svg text");
+    var ni = 0;
+    texts.forEach(function (tel) {
+      if (tel.closest("g.bee-thumb")) return;
+      var raw = (tel.textContent || "").trim();
+      if (!raw) return;
+      pixelRevealSvgText(tel, ni * 0.025);
+      ni++;
+    });
+  }
+
+  function pixelRevealElementText(el) {
+    if (!el) return;
+    const t = el.textContent;
+    if (!t) return;
+    pixelRevealPlainText(el, t, 0);
+  }
+  function thumbEncodedPath(fn) {
+    const f = norm(fn);
+    return f ? f.split("/").map(encodeURIComponent).join("/") : "";
+  }
+  function thumb(r) {
+    const t = norm(r[F.图片]);
+    if (t && (t.startsWith("http") || t.startsWith("data:"))) return t;
+    if (t) return t.indexOf("/") >= 0 || t.startsWith(".") ? t : IMG_BASE + encodeURIComponent(t);
+    const u = norm(r[F.当前图片]);
+    if (u && (u.startsWith("http") || u.startsWith("data:"))) return u;
+    if (u) return u.indexOf("/") >= 0 || u.startsWith(".") ? u : IMG_BASE + encodeURIComponent(u);
+    const p = thumbEncodedPath(r[F.原文件名]);
+    return p ? IMG_BASE + p : "";
+  }
+  function thumbAltUrl(r) {
+    const p = thumbEncodedPath(r[F.原文件名]);
+    return p && typeof IMG_BASE_ALT !== "undefined" && IMG_BASE_ALT ? IMG_BASE_ALT + p : "";
+  }
+
+  function matchRow(r, omit) {
+    for (const k of FILTER_KEYS) {
+      if (k === omit) continue;
+      const f = filters[k];
+      if (f == null) continue;
+      if (k === F.图片 && f === "__HAS_URL__") {
+        if (!norm(r[F.图片])) return false;
+        continue;
+      }
+      if (norm(r[k]) !== norm(f)) return false;
+    }
+    if (omit !== "__bin__" && textBin) {
+      const n = +r[F.字数];
+      if (isNaN(n) || n < textBin[0] || n >= textBin[1]) return false;
+    }
+    return true;
+  }
+  function rowsExact() { return ALL.filter(r => matchRow(r, null)); }
+  function rowsMarg(omit) {
+    if (omit === F.字数) return ALL.filter(r => matchRow(r, "__bin__"));
+    return ALL.filter(r => matchRow(r, omit));
+  }
+
+  function bumpViz() {
+    const a = document.querySelector(".app");
+    if (!a) return;
+    a.classList.remove("viz-bump");
+    void a.offsetWidth;
+    a.classList.add("viz-bump");
+  }
+
+  function setFilter(k, v) {
+    const t = norm(v);
+    if (filters[k] === t) filters[k] = null;
+    else filters[k] = t;
+    bumpViz();
+    render();
+  }
+  function setPhase(v) {
+    filters[F.细分] = v ? norm(v) : null;
+    bumpViz();
+    render();
+  }
+  function clearFilters() {
+    FILTER_KEYS.forEach(k => { filters[k] = null; });
+    textBin = null;
+    bumpViz();
+    render();
+  }
+  function setTextBin(lo, hi) {
+    const same = textBin && textBin[0] === lo && textBin[1] === hi;
+    textBin = same ? null : [lo, hi];
+    bumpViz();
+    render();
+  }
+
+  function aggregate(rows, key) {
+    const m = new Map();
+    for (const r of rows) {
+      let v = r[key];
+      if (key === F.字数 || key === F.复杂度 || key === F.包装) v = String(v == null ? "" : v);
+      else v = norm(v) || "（空）";
+      m.set(v, (m.get(v) || 0) + 1);
+    }
+    return [...m].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count);
+  }
+
+  function s2ShortKey(s, maxLen) {
+    var t = String(s == null ? "" : s);
+    if (t.length <= maxLen) return t;
+    return t.slice(0, maxLen - 1) + "…";
+  }
+  /** 图内摘要：默认右上；可用 opts 改锚点与行距，避免与双轴/纵轴标题重叠 */
+  function s2MiniDenseCaption(svg, w, rows, extraLines, opts) {
+    opts = opts || {};
+    if (!rows || !rows.length || !svg || w == null) return;
+    var anchor = opts.anchor || "end";
+    var tx = opts.tx != null ? opts.tx : w - 12;
+    var ty = opts.ty != null ? opts.ty : 14;
+    var lineDy = opts.lineDy != null ? opts.lineDy : 14;
+    var g = svg.append("g").attr("class", "s2-dense-cap").attr("pointer-events", "none");
+    var arr = [];
+    if (!opts.skipStats) {
+      var risk = aggregate(rows, F.风险)[0];
+      var rel = aggregate(rows, F.关系)[0];
+      var scen = aggregate(rows, F.场景)[0];
+      var emo = aggregate(rows, F.情绪)[0];
+      if (!opts.omitN) arr.push("n=" + rows.length);
+      if (emo) arr.push("情绪众:" + s2ShortKey(emo.key, 6) + "·" + emo.count);
+      if (risk) arr.push("风险众:" + s2ShortKey(risk.key, 5) + "·" + risk.count);
+      if (rel) arr.push("关系众:" + s2ShortKey(rel.key, 5) + "·" + rel.count);
+      if (scen) arr.push("场景众:" + s2ShortKey(scen.key, 5) + "·" + scen.count);
+    } else if (!opts.omitN) {
+      arr.push("n=" + rows.length);
+    }
+    (extraLines || []).forEach(function (x) { if (x) arr.push(String(x)); });
+    if (opts.alignPlotBottom != null && arr.length) {
+      ty = opts.alignPlotBottom - (arr.length - 1) * lineDy - 2;
+      if (opts.tx != null) tx = opts.tx;
+      anchor = opts.anchor || "start";
+    }
+    g.attr("transform", "translate(" + tx + "," + ty + ")");
+    arr.forEach(function (t, i) {
+      g.append("text").attr("x", 0).attr("y", i * lineDy).attr("text-anchor", anchor)
+        .attr("fill", "rgba(210,210,225,0.92)").style("font-size", "8.5px").text(t);
+    });
+  }
+
+  function s2AxisTitleX(svg, cx, y, text) {
+    svg.append("text").attr("x", cx).attr("y", y).attr("text-anchor", "middle")
+      .attr("fill", "#c4c4d4").style("font-size", "11px").style("font-weight", "700").text(text);
+  }
+  function s2AxisTitleY(svg, x, cy, text) {
+    svg.append("text").attr("x", x).attr("y", cy).attr("text-anchor", "middle")
+      .attr("fill", "#c4c4d4").style("font-size", "11px").style("font-weight", "700")
+      .attr("transform", "rotate(-90," + x + "," + cy + ")").text(text);
+  }
+
+  /** 原：横轴/纵轴数据含义小字；已关闭（保留空函数，各图调用无需改动） */
+  function s2AxisDimNotes() {}
+
+  const tipEl = document.getElementById("tip");
+  function tipShow(ev, html) {
+    tipEl.innerHTML = html;
+    tipEl.classList.add("on");
+    moveTip(ev);
+  }
+  function moveTip(ev) {
+    let x = ev.clientX + 14, y = ev.clientY + 14;
+    if (x + 300 > innerWidth) x = ev.clientX - 300;
+    if (y + 120 > innerHeight) y = ev.clientY - 130;
+    tipEl.style.left = x + "px";
+    tipEl.style.top = y + "px";
+  }
+  function tipHide() { tipEl.classList.remove("on"); }
+
+  function renderFiltersBar() {
+    const host = document.getElementById("filters-bar");
+    host.innerHTML = "";
+    const parts = [];
+    FILTER_KEYS.forEach(k => {
+      if (filters[k] != null) {
+        let d = filters[k];
+        if (k === F.图片 && d === "__HAS_URL__") d = "有图片链接";
+        parts.push(`${k}: ${d}`);
+      }
+    });
+    if (textBin) parts.push(`字数区间: [${textBin[0]}, ${textBin[1]})`);
+    if (!parts.length) {
+      const s = document.createElement("span");
+      s.className = "chip dim";
+      s.textContent = "当前无筛选条件";
+      host.appendChild(s);
+    } else {
+      parts.forEach(p => {
+        const s = document.createElement("span");
+        s.className = "chip";
+        s.textContent = p;
+        host.appendChild(s);
+      });
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ghost";
+      b.textContent = "清除全部";
+      b.onclick = clearFilters;
+      host.appendChild(b);
+    }
+    requestAnimationFrame(function () {
+      host.querySelectorAll(".chip, button.ghost").forEach(function (el) {
+        const t = el.textContent;
+        el.textContent = "";
+        pixelRevealPlainText(el, t, 0);
+      });
+    });
+  }
+
+  function renderPhases() {
+    const host = document.getElementById("phases");
+    host.innerHTML = "";
+    const rows = rowsMarg(F.细分);
+    const cur = filters[F.细分];
+    const PHASE_STRIP = PHASE_STRIP_DEF;
+
+    function block(entry, samples, count) {
+      const isAll = entry.isAll;
+      const label = entry.key;
+      const on = isAll ? !cur : norm(cur) === norm(label);
+      const div = document.createElement("div");
+      div.className = "phase-block phase-block--strip" + (on ? " on" : "");
+      div.innerHTML = "<h3>" + esc(entry.label) + "</h3><div class='meta'>" + count + " 条</div>";
+      const thumbs = document.createElement("div");
+      thumbs.className = "phase-thumbs phase-thumbs--strip";
+      samples.filter(s => thumb(s)).forEach(s => {
+        const img = document.createElement("img");
+        img.src = thumb(s);
+        const altu = thumbAltUrl(s);
+        if (altu) img.setAttribute("data-img-alt", altu);
+        img.alt = "";
+        img.addEventListener("error", function () {
+          const a = this.getAttribute("data-img-alt");
+          if (a && !this.dataset._fb) { this.dataset._fb = "1"; this.src = a; }
+        });
+        img.addEventListener("mouseenter", ev => {
+          const memo = norm(s[F.图字]) || "（无图内字）";
+          tipShow(ev, `<img src="${esc(thumb(s))}" alt="">` + esc(memo));
+        });
+        img.addEventListener("mousemove", moveTip);
+        img.addEventListener("mouseleave", tipHide);
+        thumbs.appendChild(img);
+      });
+      div.appendChild(thumbs);
+      div.addEventListener("click", () => setPhase(isAll ? null : label));
+      host.appendChild(div);
+    }
+
+    PHASE_STRIP.forEach(entry => {
+      if (entry.isAll) {
+        block(entry, rows, rows.length);
+        return;
+      }
+      const samples = rows.filter(r => norm(r[F.细分]) === norm(entry.key));
+      block(entry, samples, samples.length);
+    });
+    requestAnimationFrame(function () {
+      document.querySelectorAll("#phases .phase-block h3").forEach(function (h, i) {
+        const t = h.textContent;
+        h.textContent = "";
+        pixelRevealPlainText(h, t, i * 0.014);
+      });
+      document.querySelectorAll("#phases .phase-block .meta").forEach(function (m, i) {
+        const t = m.textContent;
+        m.textContent = "";
+        pixelRevealPlainText(m, t, 0.04 + i * 0.014);
+      });
+    });
+  }
+
+  const PHASE_ORDER = ["场景细分萌芽", "关系分层", "礼貌化表达", "情绪包装", "软攻击/婉拒系统", "万能模板化"];
+  /**
+   * 阶段条：展示文案（label）与表格「细分阶段」字段（key）对应；首项为全部。
+   * 顺序：全部展示 → 场景细分萌芽化 → 情绪包装化 → 关系分层化 → 礼貌化表达化 → 软攻击/婉拒系统 → 万能模板化
+   */
+  const PHASE_STRIP_DEF = [
+    { label: "全部展示", key: null, isAll: true },
+    { label: "场景细分萌芽化", key: "场景细分萌芽", isAll: false },
+    { label: "情绪包装化", key: "情绪包装", isAll: false },
+    { label: "关系分层化", key: "关系分层", isAll: false },
+    { label: "礼貌化表达化", key: "礼貌化表达", isAll: false },
+    { label: "软攻击/婉拒系统", key: "软攻击/婉拒系统", isAll: false },
+    { label: "万能模板化", key: "万能模板化", isAll: false }
+  ];
+  function sortPhases(agg) {
+    return agg.slice().sort(function (a, b) {
+      var ia = PHASE_ORDER.indexOf(norm(a.key)), ib = PHASE_ORDER.indexOf(norm(b.key));
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
+  }
+  function seed01(i) { return ((i * 1103515245 + 12345) >>> 0) / 4294967296; }
+  function colorByBW(key) {
+    const s = String(key);
+    if (s.indexOf("彩") >= 0) return PAL[3];
+    if (s.indexOf("黑白") >= 0) return PAL[1];
+    return PAL[0];
+  }
+  function whenChartVisible(host, drawAnim) {
+    const io = new IntersectionObserver((ents) => {
+      ents.forEach(e => {
+        if (e.isIntersecting) {
+          drawAnim();
+          io.disconnect();
+        }
+      });
+    }, { root: null, rootMargin: "0px 0px -5% 0px", threshold: 0.08 });
+    io.observe(host);
+    setTimeout(drawAnim, 1800);
+  }
+
+  function bindChartRevealForPanel(panelEl, host) {
+    if (!panelEl || !host) return;
+    host.classList.remove("viz-chart-in");
+    delete host.dataset.vizRevealed;
+    var reveal = function () {
+      if (host.dataset.vizRevealed === "1") return;
+      host.dataset.vizRevealed = "1";
+      requestAnimationFrame(function () {
+        host.classList.add("viz-chart-in");
+      });
+    };
+    try {
+      var io = new IntersectionObserver(function (ents) {
+        ents.forEach(function (e) {
+          if (e.isIntersecting) {
+            reveal();
+            io.disconnect();
+          }
+        });
+      }, { root: null, threshold: 0.01, rootMargin: "100px 0px 100px 0px" });
+      io.observe(panelEl);
+    } catch (err) {
+      setTimeout(reveal, 200);
+    }
+    requestAnimationFrame(function () {
+      var rect = panelEl.getBoundingClientRect();
+      var vh = window.innerHeight || document.documentElement.clientHeight || 800;
+      if (rect.bottom > -40 && rect.top < vh + 40) reveal();
+    });
+    setTimeout(reveal, 500);
+  }
+
+
+function s2FineGridXY(gridG, x0, y0, x1, y1, vCount, hCount) {
+    /* 全局更密：避免“数据超出线框”视觉错位 */
+    vCount = Math.max(32, Math.round(vCount * 3.35));
+    hCount = Math.max(28, Math.round(hCount * 3.35));
+    var sf = typeof CHART_GRID_FINE !== "undefined" ? CHART_GRID_FINE : "rgba(255,255,255,0.11)";
+    var wf = typeof CHART_GRID_FINE_W !== "undefined" ? CHART_GRID_FINE_W : 0.32;
+    var sm = typeof CHART_GRID_STROKE !== "undefined" ? CHART_GRID_STROKE : "rgba(255,255,255,0.5)";
+    var wm = typeof CHART_GRID_W !== "undefined" ? CHART_GRID_W : 0.55;
+    var i, vx, hy;
+    for (i = 1; i < vCount; i++) {
+      vx = x0 + (i / vCount) * (x1 - x0);
+      gridG.append("line").attr("x1", vx).attr("x2", vx).attr("y1", y0).attr("y2", y1)
+        .attr("stroke", i % 5 === 0 ? sm : sf).attr("stroke-width", i % 5 === 0 ? wm : wf).attr("stroke-dasharray", i % 5 === 0 ? "none" : "2 3");
+    }
+    for (i = 1; i < hCount; i++) {
+      hy = y0 + (i / hCount) * (y1 - y0);
+      gridG.append("line").attr("x1", x0).attr("x2", x1).attr("y1", hy).attr("y2", hy)
+        .attr("stroke", i % 4 === 0 ? sm : sf).attr("stroke-width", i % 4 === 0 ? wm : wf).attr("stroke-dasharray", i % 4 === 0 ? "none" : "2 3");
+    }
+  }
+  function s2PolarFineRays(gridG, cx, cy, R, nRays) {
+    nRays = Math.max(72, Math.round(nRays * 2.1));
+    var sf = typeof CHART_GRID_FINE !== "undefined" ? CHART_GRID_FINE : "rgba(255,255,255,0.11)";
+    var wf = typeof CHART_GRID_FINE_W !== "undefined" ? CHART_GRID_FINE_W : 0.32;
+    var sm = typeof CHART_GRID_STROKE !== "undefined" ? CHART_GRID_STROKE : "rgba(255,255,255,0.5)";
+    var wm = typeof CHART_GRID_W !== "undefined" ? CHART_GRID_W : 0.55;
+    var k, ang;
+    for (k = 0; k < nRays; k++) {
+      ang = (k / nRays) * 2 * Math.PI - Math.PI / 2;
+      gridG.append("line").attr("x1", cx).attr("y1", cy).attr("x2", cx + Math.cos(ang) * R).attr("y2", cy + Math.sin(ang) * R)
+        .attr("stroke", k % 3 === 0 ? sm : sf).attr("stroke-width", k % 3 === 0 ? wm : wf).attr("stroke-dasharray", k % 3 === 0 ? "none" : "2 2");
+    }
+  }
+
+  /** 路径“沿方向生长”（线条从无到有），用于折线/弦带等 */
+  function revealStrokePath(sel, dur, delay) {
+    const dMs = dur == null ? 820 : dur;
+    const dDel = delay == null ? 0 : delay;
+    sel.each(function () {
+      const node = this;
+      if (node && typeof node.getTotalLength === "function") {
+        const L = node.getTotalLength();
+        d3.select(node)
+          .attr("stroke-dasharray", L + " " + (L + 2))
+          .attr("stroke-dashoffset", L)
+          .attr("opacity", 1)
+          .transition()
+          .delay(dDel)
+          .duration(dMs)
+          .ease(d3.easeCubicOut)
+          .attr("stroke-dashoffset", 0);
+      }
+    });
+  }
+
+  /** 虚线也按路径“画出来”，并保留虚线样式 */
+  function revealStrokePathDashed(sel, dashPattern, dur, delay) {
+    const pat = dashPattern || "5 4";
+    const dMs = dur == null ? 920 : dur;
+    const dDel = delay == null ? 0 : delay;
+    sel.each(function () {
+      const node = this;
+      if (node && typeof node.getTotalLength === "function") {
+        const L = node.getTotalLength();
+        d3.select(node)
+          .attr("stroke-dasharray", pat)
+          .attr("stroke-dashoffset", L)
+          .attr("opacity", 1)
+          .transition()
+          .delay(dDel)
+          .duration(dMs)
+          .ease(d3.easeCubicOut)
+          .attr("stroke-dashoffset", 0);
+      }
+    });
+  }
+
+  /** 热力格内文字：根据底色亮度选深/浅字 */
+  function s3TextContrastOnHeat(hexish) {
+    try {
+      var c = typeof hexish === "string" ? d3.color(hexish) : hexish;
+      if (!c || c.opacity === 0) return "#e8e8f0";
+      var L = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+      return L > 115 ? "#12121a" : "#f6f6fc";
+    } catch (e) { return "#e8e8f0"; }
+  }
+
+  /** 高饱和主色压成半透明玻璃色（减轻「实心土色」） */
+  function s3SoftTint(hex, opacity) {
+    try {
+      var c = d3.color(hex);
+      if (c) {
+        c.opacity = opacity == null ? 0.42 : opacity;
+        return String(c);
+      }
+    } catch (e1) { /* fallthrough */ }
+    return "rgba(170,168,190,0.38)";
+  }
+
+  /** 01：黄金角螺旋点云 — 每点=一样本，色相=直接性；半透明+描边，悬停同类高亮 */
+  function s3ChartDonutDirect(container, rows) {
+    var agg = aggregate(rows, F.直接).filter(function (d) { return d.count > 0; });
+    if (!agg.length) return;
+    var keyToPal = new Map();
+    agg.forEach(function (d, i) { keyToPal.set(norm(d.key), i % 4); });
+    var sorted = rows.slice().sort(function (a, b) {
+      return String(norm(a[F.直接])).localeCompare(String(norm(b[F.直接])), "zh");
+    });
+    var w = chartBoxW(container);
+    var h = 500;
+    var m = { t: 44, l: 40, r: 40, b: 140 };
+    var innerW = w - m.l - m.r;
+    var innerH = h - m.t - m.b;
+    var cx = m.l + innerW / 2;
+    var cy = m.t + innerH / 2;
+    var plotR = Math.min(innerW, innerH) * 0.46;
+    var n = sorted.length;
+    var tot = n || 1;
+    var golden = Math.PI * (3 - Math.sqrt(5));
+    var rScale = plotR / Math.sqrt(Math.max(n, 1));
+    var svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    var defs = svg.append("defs");
+    var gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    s2PolarFineRays(gridG, cx, cy, plotR + 8, 48);
+    s2FineGridXY(gridG, m.l, m.t, m.l + innerW, m.t + innerH, 22, 18);
+    svg.append("circle").attr("cx", cx).attr("cy", cy).attr("r", plotR + 1)
+      .attr("fill", "none").attr("stroke", "rgba(255,255,255,0.07)").attr("stroke-width", 1).attr("pointer-events", "none");
+    var gSp = svg.append("g").attr("class", "s3-spiral");
+    var dots = gSp.selectAll("circle.s3spi").data(sorted).enter().append("circle").attr("class", "s3spi s3-fade")
+      .attr("r", function (_, i) { return 2.1 + 2.2 * Math.pow((i + 1) / Math.max(n, 1), 0.28); })
+      .attr("cx", cx).attr("cy", cy)
+      .attr("fill", function (d) { return s3SoftTint(PAL[keyToPal.get(norm(d[F.直接])) || 0], 0.48); })
+      .attr("stroke", "rgba(255,255,255,0.32)").attr("stroke-width", 0.55)
+      .style("cursor", "pointer")
+      .on("click", function (ev, d) { setFilter(F.直接, norm(d[F.直接])); })
+      .on("mouseenter", function (ev, d) {
+        var k = norm(d[F.直接]);
+        svg.classed("s3-has-hover", true);
+        gSp.selectAll("circle").classed("s3-focus", function (dd) { return norm(dd[F.直接]) === k; });
+        var c = sorted.filter(function (r) { return norm(r[F.直接]) === k; }).length;
+        tipShow(ev, esc(String(k)) + "<br>约 " + c + " 条 · " + Math.round(c / tot * 1000) / 10 + "%");
+      })
+      .on("mousemove", moveTip)
+      .on("mouseleave", function () {
+        svg.classed("s3-has-hover", false);
+        gSp.selectAll("circle").classed("s3-focus", false);
+        tipHide();
+      });
+    runWhenChartSvgVisible(container, function () {
+      dots.transition().duration(920).ease(d3.easeCubicOut).delay(function (_, i) { return i * 2.2; })
+        .attr("cx", function (_, i) {
+          var rr = rScale * Math.sqrt(i + 1);
+          return cx + rr * Math.cos(i * golden);
+        })
+        .attr("cy", function (_, i) {
+          var rr = rScale * Math.sqrt(i + 1);
+          return cy + rr * Math.sin(i * golden);
+        });
+    });
+    var lyLeg = m.t + innerH + 14;
+    agg.forEach(function (d, i) {
+      var pct = Math.round(d.count / tot * 1000) / 10;
+      var sw = defs.append("linearGradient").attr("id", "s3leg01_" + i).attr("x1", "0%").attr("x2", "100%");
+      sw.append("stop").attr("offset", "0%").attr("stop-color", s3SoftTint(PAL[i % 4], 0.85));
+      sw.append("stop").attr("offset", "100%").attr("stop-color", s3SoftTint(PAL[i % 4], 0.2));
+      svg.append("rect").attr("x", m.l).attr("y", lyLeg + i * 17).attr("width", 14).attr("height", 10).attr("rx", 3)
+        .attr("fill", "url(#s3leg01_" + i + ")").attr("stroke", "rgba(255,255,255,0.2)").attr("pointer-events", "none");
+      svg.append("text").attr("x", m.l + 22).attr("y", lyLeg + i * 17 + 9).attr("fill", "#b8b8c8").style("font-size", "8px")
+        .text(s2ShortKey(d.key, 18) + "  " + d.count + " · " + pct + "%");
+    });
+    svg.append("text").attr("x", m.l).attr("y", m.t - 8).attr("fill", "#8a8a9c").style("font-size", "8px")
+      .text("黄金角螺旋：由中心向外生长，邻近点来自时间顺序；同色=同一「表达直接性」");
+    s2AxisTitleX(svg, w / 2, h - 44, "悬停：同类点高亮；点击单点筛该直接性档位");
+    s2AxisDimNotes(svg, h - 12,
+      "无独立「类目横轴」刻度：水平位置由螺旋角 φ=idx×黄金角 与径向半径 r∝√序号 共同决定（示意网格仅助读）。",
+      "无独立「度量纵轴」刻度：垂直位置同上，为二维展开后的像素坐标；点色=字段「" + F.直接 + "」档位。");
+    var legDon = agg.map(function (d, i) { return { hex: PAL[i % 4], text: s2ShortKey(d.key, 12) }; });
+    legDon.unshift({ hex: "rgba(255,255,255,0.35)", text: "半透明点阵" });
+    setFigCaptionLegend(container, legDon,
+      "图注：用螺旋密铺替代条形/环形，密度即样本量；配色为低不透明度主色+细描边，避免大块纯色。\n" + captionSampleLine(rows));
+  }
+
+  /** 02：横轴=六个细分阶段，纵轴=社交场景；格内铺全量有图样本，边长∝√字数，描边=黑白/彩色 */
+  function s3ChartHBarSubstage(container, rows) {
+    if (!rows.length) return;
+
+    var sceneList = aggregate(
+      rows.filter(function (r) { return PHASE_ORDER.indexOf(norm(r[F.细分])) >= 0; }),
+      F.场景
+    ).filter(function (d) { return d.count > 0; }).sort(function (a, b) { return b.count - a.count; }).map(function (d) { return d.key; });
+    if (!sceneList.length) return;
+
+    var pts = [];
+    rows.forEach(function (r, idx) {
+      var pi = PHASE_ORDER.indexOf(norm(r[F.细分]));
+      if (pi < 0) return;
+      var si = -1;
+      var sj;
+      for (sj = 0; sj < sceneList.length; sj++) {
+        if (norm(sceneList[sj]) === norm(r[F.场景])) {
+          si = sj;
+          break;
+        }
+      }
+      if (si < 0) return;
+      var href = thumb(r);
+      if (!href) return;
+      var nw = +r[F.字数];
+      if (isNaN(nw) || nw < 0) nw = 0;
+      var isBw = norm(r[F.黑白]) === norm("黑白");
+      pts.push({ r: r, href: href, pi: pi, si: si, idx: idx, nw: Math.max(0, nw), isBw: isBw });
+    });
+    if (!pts.length) return;
+
+    var w = chartBoxW(container);
+    var m = { t: 40, l: 138, r: 32, b: 172 };
+    var plotW = Math.max(160, w - m.l - m.r);
+    var vh = typeof innerHeight !== "undefined" ? innerHeight : 800;
+    var targetPlotH = Math.max(280, Math.min(Math.floor(vh * 0.54), sceneList.length * 84));
+    var rowH = Math.max(36, Math.min(88, targetPlotH / Math.max(sceneList.length, 1)));
+    var plotH = rowH * sceneList.length;
+    var h = m.t + plotH + m.b;
+
+    var xSc = d3.scaleBand().domain(PHASE_ORDER).range([m.l, m.l + plotW]).paddingInner(0.09).paddingOuter(0.02);
+    var ySc = d3.scaleBand().domain(sceneList).range([m.t, m.t + plotH]).paddingInner(0.11).paddingOuter(0.02);
+    var cellW = xSc.bandwidth();
+    var cellH = ySc.bandwidth();
+
+    var nums = pts.map(function (p) { return Math.max(1, p.nw || 1); });
+    var minW = d3.min(nums) || 1;
+    var maxW = d3.max(nums) || 1;
+    var maxSide = Math.max(10, Math.min(52, Math.min(cellW, cellH) * 0.5));
+    var rSz = d3.scaleSqrt().domain([minW, maxW]).range([8, maxSide]);
+    var edgeBw = "#aeb0c8";
+    var edgeColor = "#59E2FD";
+
+    function layoutSpiral(items, x0, y0, bw, bh, szFn) {
+      var cx = x0 + bw / 2;
+      var cy = y0 + bh / 2;
+      var golden = Math.PI * (3 - Math.sqrt(5));
+      items.forEach(function (d, i) {
+        var sz = szFn(d);
+        d._sz = sz;
+        var rr = Math.min(bw, bh) * 0.17 * Math.pow(i + 1, 0.56);
+        var ang = i * golden + d.idx * 0.024;
+        var px = cx + rr * Math.cos(ang);
+        var py = cy + rr * Math.sin(ang);
+        px = Math.max(x0 + sz / 2 + 2, Math.min(x0 + bw - sz / 2 - 2, px));
+        py = Math.max(y0 + sz / 2 + 2, Math.min(y0 + bh - sz / 2 - 2, py));
+        d._px = px;
+        d._py = py;
+      });
+    }
+
+    var cellBins = {};
+    pts.forEach(function (p) {
+      var k = p.pi + "\t" + p.si;
+      if (!cellBins[k]) cellBins[k] = [];
+      cellBins[k].push(p);
+    });
+    Object.keys(cellBins).forEach(function (k) {
+      var arr = cellBins[k];
+      var parts = k.split("\t");
+      var pi = +parts[0];
+      var si = +parts[1];
+      var x0 = xSc(PHASE_ORDER[pi]);
+      var y0 = ySc(sceneList[si]);
+      layoutSpiral(arr, x0, y0, cellW, cellH, function (d) { return rSz(Math.max(1, d.nw || 1)); });
+    });
+
+    pts.sort(function (a, b) { return b._sz - a._sz; });
+
+    var svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    var defs = svg.append("defs");
+    var gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    s2FineGridXY(gridG, m.l, m.t, m.l + plotW, m.t + plotH, (PHASE_ORDER.length + 4) * 5, (sceneList.length + 2) * 6);
+
+    var gridData = [];
+    PHASE_ORDER.forEach(function (unusedP, gi) {
+      sceneList.forEach(function (unusedS, gj) {
+        gridData.push({ pi: gi, si: gj });
+      });
+    });
+    svg.append("g").attr("class", "s3-mem-grid-bg").selectAll("rect.gb").data(gridData).enter().append("rect").attr("class", "gb")
+      .attr("x", function (d) { return xSc(PHASE_ORDER[d.pi]); })
+      .attr("y", function (d) { return ySc(sceneList[d.si]); })
+      .attr("width", cellW).attr("height", cellH)
+      .attr("fill", "rgba(255,255,255,0.02)").attr("stroke", "rgba(255,255,255,0.06)").attr("pointer-events", "none");
+
+    gridData.forEach(function (d) {
+      var cid = "s3mc_" + d.pi + "_" + d.si;
+      defs.append("clipPath").attr("id", cid).append("rect")
+        .attr("x", xSc(PHASE_ORDER[d.pi]) + 0.5).attr("y", ySc(sceneList[d.si]) + 0.5)
+        .attr("width", Math.max(0, cellW - 1)).attr("height", Math.max(0, cellH - 1)).attr("rx", 2);
+    });
+
+    var gImg = svg.append("g").attr("class", "s3-mem-thumbs");
+    var nodes = gImg.selectAll("g.mem-node").data(pts).enter().append("g").attr("class", "mem-node s3-fade")
+      .attr("clip-path", function (d) { return "url(#s3mc_" + d.pi + "_" + d.si + ")"; })
+      .style("cursor", "pointer");
+
+    nodes.append("image")
+      .attr("href", function (d) { return d.href; }).attr("xlink:href", function (d) { return d.href; })
+      .attr("preserveAspectRatio", "xMidYMid meet")
+      .attr("opacity", 0.93)
+      .attr("x", function (d) { return d._px - d._sz / 2; })
+      .attr("y", function (d) { return d._py - d._sz / 2; })
+      .attr("width", 0).attr("height", 0);
+
+    nodes.append("rect").attr("class", "mem-edge")
+      .attr("fill", "none")
+      .attr("stroke", function (d) { return d.isBw ? edgeBw : edgeColor; })
+      .attr("stroke-width", 1.35)
+      .attr("rx", 2).attr("ry", 2)
+      .attr("pointer-events", "none")
+      .attr("x", function (d) { return d._px - d._sz / 2; })
+      .attr("y", function (d) { return d._py - d._sz / 2; })
+      .attr("width", 0).attr("height", 0);
+
+    nodes.on("click", function (ev, d) {
+      setPhase(PHASE_ORDER[d.pi]);
+      setFilter(F.场景, sceneList[d.si]);
+    })
+      .on("mouseenter", function (ev, d) {
+        svg.classed("s3-has-hover", true);
+        gImg.selectAll("g.mem-node").classed("s3-focus", function (dd) { return dd.pi === d.pi; });
+        var href = d.href;
+        tipShow(ev, (href ? "<img src=\"" + esc(href) + "\" alt=\"\">" : "") + esc(PHASE_ORDER[d.pi]) + "<br>" + esc(String(sceneList[d.si])) + "<br>" + F.字数 + " " + d.nw + "<br>" + F.黑白 + " " + esc(String(norm(d.r[F.黑白]) || "—")));
+      })
+      .on("mousemove", moveTip)
+      .on("mouseleave", function () {
+        svg.classed("s3-has-hover", false);
+        gImg.selectAll("g.mem-node").classed("s3-focus", false);
+        tipHide();
+      });
+
+    runWhenChartSvgVisible(container, function () {
+      nodes.select("image").transition().duration(520).ease(d3.easeCubicOut).delay(function (d) { return (d.pi + d.si) * 8 + (d.idx % 50) * 3; })
+        .attr("width", function (d) { return d._sz; }).attr("height", function (d) { return d._sz; });
+      nodes.select("rect.mem-edge").transition().duration(520).ease(d3.easeCubicOut).delay(function (d) { return (d.pi + d.si) * 8 + (d.idx % 50) * 3; })
+        .attr("width", function (d) { return d._sz; }).attr("height", function (d) { return d._sz; });
+    });
+
+    var xLabY = m.t + plotH + 15;
+    svg.append("g").attr("class", "s3-mem-xlab").selectAll("text.xl").data(PHASE_ORDER).enter().append("text").attr("class", "xl")
+      .attr("x", function (d) { return xSc(d) + cellW / 2; }).attr("y", xLabY)
+      .attr("text-anchor", "middle").attr("fill", "#b8b8cc").style("font-size", "8px")
+      .text(function (d) { return s2ShortKey(d, 8); });
+
+    svg.append("g").attr("class", "s3-mem-ylab").selectAll("text.yl").data(sceneList).enter().append("text").attr("class", "yl")
+      .attr("x", m.l - 8).attr("y", function (d) { return ySc(d) + cellH / 2 + 3; })
+      .attr("text-anchor", "end").attr("fill", "#c8c8d8").style("font-size", "8px")
+      .text(function (d) { return s2ShortKey(d, 14); });
+
+    s2AxisTitleX(svg, m.l + plotW / 2, h - 48, "横轴：六个「" + F.细分 + "」阶段（离散列）；每格内黄金角螺旋排布该阶段∩该场景下全部有路径缩略图");
+    s2AxisTitleY(svg, 20, m.t + plotH / 2, "纵轴：「" + F.场景 + "」各类目（行）；行高随场景数均分，约 " + Math.round(rowH) + "px");
+    s2AxisDimNotes(svg, h - 12,
+      "横轴刻度：六列依次为 " + PHASE_ORDER.map(function (p) { return "「" + s2ShortKey(p, 6) + "」"; }).join("、") + "；列宽约 " + Math.round(cellW) + "px。",
+      "纵轴刻度：共 " + sceneList.length + " 行社交场景；点边长映射字段「" + F.字数 + "」（√刻度，全图 min–max：" + minW + "—" + maxW + "）；描边灰=「黑白」，青=「彩色」。");
+    s2MiniDenseCaption(svg, w, rows, [], { tx: w - 14, ty: h - 74, anchor: "end", lineDy: 14, skipStats: true });
+
+    var legHb = [
+      { hex: edgeBw, text: "描边灰=" + s2ShortKey("黑白", 6) },
+      { hex: edgeColor, text: "描边青=" + s2ShortKey("彩色", 6) },
+      { hex: "#888", text: "方形边长∝√" + F.字数 }
+    ];
+    setFigCaptionLegend(container, legHb,
+      "图注：仅绘制「" + F.图片 + "」路径可解析的样本；同格多图螺旋占位，clip 在格内。点击单图筛该阶段+该场景。\n" + captionSampleLine(rows));
+  }
+
+  /** 03：原情 × 包后 二分弦图（弧长=边际合计，丝带=交叉频数） */
+  function s3ChartHeatmapOrigPack(container, rows) {
+    var topO = aggregate(rows, F.原情).sort(function (a, b) { return b.count - a.count; }).slice(0, 6).map(function (d) { return d.key; });
+    var topP = aggregate(rows, F.包后).sort(function (a, b) { return b.count - a.count; }).slice(0, 6).map(function (d) { return d.key; });
+    if (!topO.length || !topP.length) return;
+    var mat = {};
+    var maxN = 0;
+    topO.forEach(function (o) {
+      topP.forEach(function (p) {
+        var n = rows.filter(function (r) { return norm(r[F.原情]) === norm(o) && norm(r[F.包后]) === norm(p); }).length;
+        mat[o + "\t" + p] = n;
+        if (n > maxN) maxN = n;
+      });
+    });
+    if (maxN < 1) return;
+    var nO = topO.length;
+    var nP = topP.length;
+    var dim = nO + nP;
+    var matrix = d3.range(dim).map(function () { return d3.range(dim).map(function () { return 0; }); });
+    topO.forEach(function (o, oi) {
+      topP.forEach(function (p, pi) {
+        var c = mat[o + "\t" + p] || 0;
+        if (c > 0) {
+          matrix[oi][nO + pi] = c;
+          matrix[nO + pi][oi] = c;
+        }
+      });
+    });
+    var chord = d3.chord().padAngle(0.035).sortSubgroups(d3.descending)(matrix);
+    var w = chartBoxW(container);
+    var h = 520;
+    var outer = Math.min(w, h) * 0.36;
+    var inner = outer - 16;
+    var svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    var cx = w / 2;
+    var cy = h / 2 - 6;
+    var g = svg.append("g").attr("transform", "translate(" + cx + "," + cy + ")");
+    var arc = d3.arc().innerRadius(inner).outerRadius(outer);
+    var ribbon = d3.ribbon().radius(inner - 2);
+    function ribColor(d) { return PAL[d.source.index % 4]; }
+    function clearHover() {
+      svg.classed("s3-has-hover", false);
+      g.selectAll(".s3-focus").classed("s3-focus", false);
+      tipHide();
+    }
+    function highlightNode(idx) {
+      svg.classed("s3-has-hover", true);
+      g.selectAll("path.chordgrp").classed("s3-focus", function (dd) { return dd.index === idx; });
+      g.selectAll("path.chordrib").classed("s3-focus", function (r) { return r.source.index === idx || r.target.index === idx; });
+    }
+    var groups = g.append("g").selectAll("path.chordgrp").data(chord.groups).enter().append("path")
+      .attr("class", "chordgrp s3-fade")
+      .attr("fill", function (d, i) { return PAL[i % 4]; })
+      .attr("stroke", "rgba(0,0,0,0.35)")
+      .style("cursor", "pointer")
+      .attr("d", arc)
+      .on("click", function (ev, d) {
+        if (d.index < nO) setFilter(F.原情, topO[d.index]);
+        else setFilter(F.包后, topP[d.index - nO]);
+      })
+      .on("mouseenter", function (ev, d) {
+        highlightNode(d.index);
+        var name = d.index < nO ? topO[d.index] : topP[d.index - nO];
+        var lbl = d.index < nO ? "原情" : "包后";
+        tipShow(ev, esc(lbl + "：" + String(name)) + "<br>边际合计 " + d.value);
+      })
+      .on("mousemove", moveTip)
+      .on("mouseleave", clearHover);
+    var ribWrap = g.append("g")
+      .selectAll("g.ribwrap").data(chord).enter().append("g")
+      .attr("class", "ribwrap")
+      .style("opacity", 0);
+    ribWrap.append("path")
+      .attr("class", "chordrib")
+      .attr("fill", ribColor)
+      .attr("fill-opacity", 0.58)
+      .attr("stroke", "rgba(0,0,0,0.22)")
+      .attr("d", ribbon)
+      .style("cursor", "crosshair")
+      .on("mouseenter", function (ev, d) {
+        svg.classed("s3-has-hover", true);
+        var si = d.source.index;
+        var ti = d.target.index;
+        g.selectAll("path.chordgrp").classed("s3-focus", function (dd) { return dd.index === si || dd.index === ti; });
+        g.selectAll("path.chordrib").classed("s3-focus", function (r) { return r === d; });
+        var oi = si < nO ? si : ti;
+        var pi = (si >= nO ? si : ti) - nO;
+        var n = mat[topO[oi] + "\t" + topP[pi]] || 0;
+        tipShow(ev, "原情 " + esc(String(topO[oi])) + "<br>包后 " + esc(String(topP[pi])) + "<br>交叉 n=" + n);
+      })
+      .on("mousemove", moveTip)
+      .on("mouseleave", clearHover);
+    runWhenChartSvgVisible(container, function () {
+      ribWrap.transition().duration(560).ease(d3.easeCubicOut).delay(function (d, i) { return i * 28; })
+        .style("opacity", 0.92);
+    });
+    var labR = outer + 20;
+    g.append("g").selectAll("text.chlab").data(chord.groups).enter().append("text")
+      .attr("class", "chlab")
+      .attr("dy", "0.35em")
+      .attr("transform", function (d) {
+        var ang = (d.startAngle + d.endAngle) / 2;
+        var rot = (ang * 180 / Math.PI) - 90;
+        return "rotate(" + rot + ")translate(" + labR + ",0)" + (rot > 90 ? "rotate(180)" : "");
+      })
+      .attr("text-anchor", function (d) {
+        var ang = (d.startAngle + d.endAngle) / 2;
+        return (ang * 180 / Math.PI) > 90 ? "end" : "start";
+      })
+      .attr("fill", "#c8c8d8").style("font-size", "8px")
+      .text(function (d, i) {
+        return i < nO ? s2ShortKey(topO[i], 10) : s2ShortKey(topP[i - nO], 8);
+      });
+    s2AxisTitleX(svg, w / 2, h - 52, "丝带：进入视口后依次淡入（生长感）；丝带宽∝原情×包后交叉条数；悬停单条高亮、相关弧同步亮");
+    s2AxisTitleY(svg, 22, h / 2, "环向角位=类目；径向厚度=弧段边际条数；点击弧筛原情或包后");
+    s2AxisDimNotes(svg, h - 14,
+      "角向（类比横轴）：0—2π 绕圆一周，前半弧=Top 原情类目，后半弧=Top 包后类目；无直线刻度，读外圈文字。",
+      "径向（类比纵轴）：内半径 " + inner.toFixed(0) + "px—外半径 " + outer.toFixed(0) + "px 为各类目弧厚，面积直觉对应边际条数；丝带径向跨度表示共现流量。");
+    s2MiniDenseCaption(svg, w, rows, [], { tx: w - 14, ty: h - 70, anchor: "end", lineDy: 14, skipStats: true });
+    setFigCaptionLegend(container, [
+      { hex: PAL[1], text: "弧段=边际" },
+      { hex: "rgba(180,140,220,0.5)", text: "丝带=共现流量" }
+    ], "图注：丝带动效用整段透明度渐入，避免 transform 缩放与 CSS 弱化叠加导致频闪。\n" + captionSampleLine(rows));
+  }
+
+  function s3ChartStripPackReal(container, rows) {
+    var w = chartBoxW(container);
+    var h = 570;
+    var m = { t: 58, l: 76, r: 40, b: 118 };
+    var packs = [1, 2, 3, 4, 5];
+    var x0 = m.l;
+    var x1 = w - m.r;
+    var y0 = m.t;
+    var y1 = h - m.b;
+    var xStep = (x1 - x0) / packs.length;
+    var svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    var gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    s2FineGridXY(gridG, x0, y0, x1, y1, packs.length * 8, 20);
+    var ySc = d3.scaleLinear().domain([30, 85]).range([y1, y0]);
+    for (var j = 1; j < packs.length; j++) {
+      var vx = x0 + j * xStep;
+      svg.append("line").attr("x1", vx).attr("x2", vx).attr("y1", y0).attr("y2", y1)
+        .attr("stroke", "rgba(255,255,255,0.06)").attr("stroke-width", 1).attr("pointer-events", "none");
+    }
+    packs.forEach(function (pk, j) {
+      svg.append("text").attr("x", x0 + j * xStep + xStep / 2).attr("y", y0 - 20).attr("text-anchor", "middle").attr("fill", "#a8a8b8").style("font-size", "9px").text("包装 " + pk);
+      var colRows = rows.filter(function (r) {
+        var p = +r[F.包装];
+        if (isNaN(p) || p < 1 || p > 5) p = 3;
+        return p === pk;
+      });
+      var meanV = d3.mean(colRows, function (r) { var v = +r[F.真实]; return isNaN(v) ? null : v; });
+      if (meanV != null && !isNaN(meanV)) {
+        svg.append("text").attr("x", x0 + j * xStep + xStep / 2).attr("y", y0 - 6).attr("text-anchor", "middle").attr("fill", "#6c58ee").style("font-size", "7px").text("μ" + Math.round(meanV));
+      }
+    });
+    svg.append("line").attr("x1", x0).attr("x2", x0).attr("y1", y0).attr("y2", y1).attr("stroke", CHART_AXIS_DOMAIN_STROKE).attr("stroke-width", 1.2);
+    var gDens = svg.append("g").attr("class", "s3-density-layer").attr("pointer-events", "none");
+    packs.forEach(function (pk, j) {
+      var colRows = rows.filter(function (r) {
+        var p = +r[F.包装];
+        if (isNaN(p) || p < 1 || p > 5) p = 3;
+        return p === pk;
+      });
+      var vals = colRows.map(function (r) { var v = +r[F.真实]; return isNaN(v) ? null : v; }).filter(function (v) { return v != null; });
+      if (vals.length < 3) return;
+      var bins = d3.bin().domain([30, 85]).thresholds(20)(vals);
+      var maxL = d3.max(bins, function (b) { return b.length; }) || 1;
+      var xMid = x0 + j * xStep + xStep / 2;
+      var maxHalfW = xStep * 0.38;
+      var bandPts = bins.map(function (b) {
+        return {
+          y: ySc((b.x0 + b.x1) / 2),
+          xL: xMid - (b.length / maxL) * maxHalfW,
+          xR: xMid + (b.length / maxL) * maxHalfW
+        };
+      });
+      bandPts.sort(function (a, b) { return a.y - b.y; });
+      var area = d3.area().curve(d3.curveMonotoneY).x0(function (d) { return d.xL; }).x1(function (d) { return d.xR; }).y(function (d) { return d.y; });
+      gDens.append("path").attr("d", area(bandPts)).attr("fill", PAL[j % 4]).attr("fill-opacity", 0.11).attr("stroke", PAL[j % 4]).attr("stroke-opacity", 0.22).attr("stroke-width", 0.6);
+    });
+    var reals = rows.map(function (r) { var v = +r[F.真实]; return isNaN(v) ? null : v; }).filter(function (v) { return v != null; });
+    var medAll = d3.median(reals);
+    if (medAll != null && !isNaN(medAll)) {
+      var ym = ySc(medAll);
+      svg.append("line").attr("x1", x0).attr("x2", x1).attr("y1", ym).attr("y2", ym)
+        .attr("stroke", "rgba(252,229,0,0.42)").attr("stroke-width", 1.1).attr("stroke-dasharray", "10 7").attr("pointer-events", "none");
+      svg.append("text").attr("x", x1 - 4).attr("y", ym - 4).attr("text-anchor", "end").attr("fill", "rgba(252,229,0,0.75)").style("font-size", "7px").text("全样本中位 " + Math.round(medAll));
+    }
+    [35, 45, 55, 65, 75, 85].forEach(function (tv) {
+      var yy = ySc(tv);
+      svg.append("line").attr("x1", x0).attr("x2", x1).attr("y1", yy).attr("y2", yy).attr("stroke", CHART_GRID_STROKE).attr("stroke-width", 0.55).attr("stroke-dasharray", "4 6");
+      svg.append("text").attr("x", x0 - 12).attr("y", yy + 4).attr("text-anchor", "end").attr("fill", "#9a9aac").style("font-size", "8px").text(tv);
+    });
+    var meanLinePts = [];
+    packs.forEach(function (pk) {
+      var colRows = rows.filter(function (r) {
+        var p = +r[F.包装];
+        if (isNaN(p) || p < 1 || p > 5) p = 3;
+        return p === pk;
+      });
+      var meanV = d3.mean(colRows, function (r) { var v = +r[F.真实]; return isNaN(v) ? null : v; });
+      if (meanV == null || isNaN(meanV)) meanV = 57;
+      meanLinePts.push([x0 + (pk - 1) * xStep + xStep / 2, ySc(meanV)]);
+    });
+    var lineD = d3.line().curve(d3.curveMonotoneX)(meanLinePts);
+    svg.append("path").attr("d", lineD).attr("fill", "none").attr("stroke", "#59e2fd").attr("stroke-width", 2).attr("stroke-linecap", "round")
+      .attr("stroke-linejoin", "round").attr("opacity", 0.85).attr("pointer-events", "none");
+    svg.append("text").attr("x", x1 - 4).attr("y", y0 + 12).attr("text-anchor", "end").attr("fill", "#59e2fd").style("font-size", "7px").text("青折线=列均值");
+    var wVals = rows.map(function (r) { var v = +r[F.字数]; return isNaN(v) ? 0 : v; });
+    var wMin = d3.min(wVals) || 0;
+    var wMax = d3.max(wVals) || 1;
+    if (wMax <= wMin) wMax = wMin + 1;
+    var rSz = d3.scaleSqrt().domain([wMin, wMax]).range([3.4, 10]);
+    var emoMap = new Map();
+    rows.forEach(function (r, idx) {
+      var e = norm(r[F.情绪]) || "—";
+      if (!emoMap.has(e)) emoMap.set(e, emoMap.size);
+    });
+    var pts = rows.map(function (r, idx) {
+      var pk = +r[F.包装];
+      if (isNaN(pk) || pk < 1 || pk > 5) pk = 3;
+      var val = +r[F.真实];
+      if (isNaN(val)) val = 55;
+      var jitter = (seed01(idx + pk * 17) - 0.5) * xStep * 0.58;
+      var x = x0 + (pk - 1) * xStep + xStep / 2 + jitter;
+      var yJ = (seed01(idx * 7 + 3) - 0.5) * 7;
+      var nw = +r[F.字数];
+      if (isNaN(nw)) nw = 0;
+      return { x: x, y: ySc(val) + yJ, r: r, pk: pk, val: val, emo: norm(r[F.情绪]) || "—", idx: idx, nw: nw, rad: rSz(nw) };
+    });
+    var circles = svg.selectAll("circle.s3pt").data(pts).enter().append("circle").attr("class", "s3pt s3-fade")
+      .attr("cx", function (d) { return d.x; }).attr("cy", function (d) { return d.y; })
+      .attr("r", 0).attr("fill", function (d) { return PAL[(emoMap.get(d.emo) || 0) % 4]; }).attr("fill-opacity", 0.72)
+      .attr("stroke", "rgba(255,255,255,0.32)").attr("stroke-width", 0.65).style("cursor", "pointer")
+      .on("click", function (ev, d) {
+        setFilter(F.包装, String(d.pk));
+        setFilter(F.情绪, d.emo);
+      })
+      .on("mouseenter", function (ev, d) {
+        svg.classed("s3-has-hover", true);
+        circles.classed("s3-focus", function (dd) { return dd.pk === d.pk; });
+        var href = thumb(d.r);
+        tipShow(ev, (href ? "<img src=\"" + esc(href) + "\" alt=\"\">" : "") + "贴近真实 " + d.val + "<br>包" + d.pk + " · " + esc(d.emo) + "<br>字数 " + d.nw + " · 点半径∝√字数");
+      })
+      .on("mousemove", moveTip)
+      .on("mouseleave", function () {
+        svg.classed("s3-has-hover", false);
+        circles.classed("s3-focus", false);
+        tipHide();
+      });
+    runWhenChartSvgVisible(container, function () {
+      circles.transition().delay(function (d) { return (d.idx % 40) * 11; }).duration(480).ease(d3.easeBackOut.overshoot(1.04)).attr("r", function (d) { return d.rad; });
+    });
+    s2AxisTitleY(svg, 22, (y0 + y1) / 2, "纵轴：贴近真实指数；黄虚线=全样本中位数");
+    s2AxisTitleX(svg, (x0 + x1) / 2, h - 38, "横轴：包装度 1—5；浅色带=各列「真实指数」核密度轮廓；悬停点同列高亮");
+    s2AxisDimNotes(svg, h - 12,
+      "横轴：字段「" + F.包装 + "」离散档位 1—5（列中心约在包装度整数位置）；列宽内为核密度+散点分布。",
+      "纵轴：字段「" + F.真实 + "」数值刻度（与左侧网格对齐）；点半径映射字段「" + F.字数 + "」的平方根。");
+    s2MiniDenseCaption(svg, w, rows, [], { tx: x1 - 8, ty: h - 64, anchor: "end", lineDy: 14, skipStats: true });
+    var emoOrder = [];
+    emoMap.forEach(function (val, k) { emoOrder.push(k); });
+    var legStrip = emoOrder.slice(0, 10).map(function (k) {
+      return { hex: PAL[(emoMap.get(k) || 0) % 4], text: s2ShortKey(k, 10) };
+    });
+    legStrip.unshift({ hex: "#59E2FD", text: "青线=各列均值轨迹" });
+    legStrip.unshift({ hex: "#888", text: "色带=列内分布 · 点色=情绪 · 大小=字数" });
+    setFigCaptionLegend(container, legStrip,
+      "图注：列内半透明「小提琴」轮廓由直方平滑得到，与散点、均值线、中位线叠读，信息密度高于纯散点。\n" + captionSampleLine(rows));
+  }
+
+  /** 05：关系 × 场景 热力矩阵 + 格内主导「社交功能」色相（与 06 曲线束区分） */
+  function s3ChartRoseSocial(container, rows) {
+    var topR = aggregate(rows, F.关系).sort(function (a, b) { return b.count - a.count; }).slice(0, 6).map(function (d) { return d.key; });
+    var topS = aggregate(rows, F.场景).sort(function (a, b) { return b.count - a.count; }).slice(0, 7).map(function (d) { return d.key; });
+    if (!topR.length || !topS.length) return;
+
+    var socOrder = aggregate(rows, F.社交).map(function (d) { return d.key; });
+    var socPal = {};
+    socOrder.forEach(function (k, i) {
+      socPal[norm(k)] = i % 4;
+    });
+
+    var cells = [];
+    var maxN = 0;
+    topR.forEach(function (rel, ri) {
+      topS.forEach(function (sc, ci) {
+        var slice = rows.filter(function (r) {
+          return norm(r[F.关系]) === norm(rel) && norm(r[F.场景]) === norm(sc);
+        });
+        var n = slice.length;
+        if (n > maxN) maxN = n;
+        var topZ = "—";
+        if (slice.length) {
+          var ag = aggregate(slice, F.社交);
+          if (ag.length) topZ = ag[0].key;
+        }
+        cells.push({ rel: rel, scene: sc, n: n, topSoc: topZ, ri: ri, ci: ci });
+      });
+    });
+
+    var w = chartBoxW(container);
+    var m = { t: 48, l: 128, r: 96, b: 152 };
+    var plotW = w - m.l - m.r;
+    var cellH = 48;
+    var plotH = topR.length * cellH;
+    var h = m.t + plotH + m.b;
+    var cw = plotW / topS.length;
+
+    var oScale = d3.scaleLinear().domain([0, maxN || 1]).range([0.18, 0.78]);
+
+    var svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg s3-chart--heatmap").attr("width", w).attr("height", h);
+    var defs = svg.append("defs");
+    var patEmpty = defs.append("pattern").attr("id", "s3rsPatEmpty").attr("width", 10).attr("height", 10).attr("patternUnits", "userSpaceOnUse");
+    patEmpty.append("rect").attr("width", 10).attr("height", 10).attr("fill", "rgba(20,22,32,0.96)");
+    patEmpty.append("path").attr("d", "M0,10 L10,0 M-2.5,2.5 L2.5,-2.5 M7.5,12.5 L12.5,7.5").attr("stroke", "rgba(255,255,255,0.075)").attr("stroke-width", 0.85);
+    var lgFrame = defs.append("linearGradient").attr("id", "s3rsPlotFrame").attr("x1", "0%").attr("y1", "0%").attr("x2", "100%").attr("y2", "100%");
+    lgFrame.append("stop").attr("offset", "0%").attr("stop-color", "rgba(89,226,253,0.55)");
+    lgFrame.append("stop").attr("offset", "48%").attr("stop-color", "rgba(108,88,238,0.42)");
+    lgFrame.append("stop").attr("offset", "100%").attr("stop-color", "rgba(252,229,0,0.38)");
+
+    var rsBack = svg.append("g").attr("class", "s3-rs-back").attr("pointer-events", "none");
+    topR.forEach(function (unused, ri) {
+      if (ri % 2 === 0) {
+        rsBack.append("rect").attr("x", m.l).attr("y", m.t + ri * cellH).attr("width", plotW).attr("height", cellH)
+          .attr("fill", "rgba(255,255,255,0.038)");
+      }
+    });
+    rsBack.append("rect").attr("x", m.l - 2).attr("y", m.t - 24).attr("width", plotW + 4).attr("height", plotH + 26)
+      .attr("rx", 8).attr("fill", "rgba(10,12,20,0.58)").attr("stroke", "rgba(255,255,255,0.07)").attr("stroke-width", 1);
+    rsBack.append("rect").attr("x", m.l - 2).attr("y", m.t - 2).attr("width", plotW + 4).attr("height", plotH + 4)
+      .attr("rx", 6).attr("fill", "none").attr("stroke", "url(#s3rsPlotFrame)").attr("stroke-width", 1.65);
+    rsBack.append("rect").attr("x", m.l - 0.75).attr("y", m.t - 0.75).attr("width", plotW + 1.5).attr("height", plotH + 1.5)
+      .attr("rx", 5).attr("fill", "none").attr("stroke", "rgba(255,255,255,0.16)").attr("stroke-width", 0.85);
+
+    var gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    s2FineGridXY(gridG, m.l, m.t, m.l + plotW, m.t + plotH, topS.length + 2, topR.length + 2);
+
+    topS.forEach(function (sc, ci) {
+      svg.append("text").attr("x", m.l + ci * cw + cw / 2).attr("y", m.t - 8).attr("text-anchor", "middle")
+        .attr("fill", "#c8c8dc").style("font-size", "8.5px").style("font-weight", "600").text(s2ShortKey(sc, 10));
+    });
+
+    topR.forEach(function (rel, ri) {
+      svg.append("text").attr("x", m.l - 10).attr("y", m.t + ri * cellH + cellH / 2 + 4).attr("text-anchor", "end")
+        .attr("fill", "#d8d8e8").style("font-size", "8.5px").style("font-weight", "600").text(s2ShortKey(rel, 14));
+    });
+
+    var rects = svg.append("g").attr("class", "s3-rs-heat").selectAll("rect.rsc").data(cells).enter().append("rect").attr("class", "rsc s3-fade")
+      .attr("x", function (d) { return m.l + d.ci * cw + 1.5; })
+      .attr("y", function (d) { return m.t + d.ri * cellH + 1.5; })
+      .attr("width", Math.max(0, cw - 3)).attr("height", cellH - 3)
+      .attr("rx", 5).attr("ry", 5)
+      .attr("fill", function (d) {
+        if (!d.n) return "url(#s3rsPatEmpty)";
+        var ix = socPal[norm(d.topSoc)];
+        if (ix == null) ix = 0;
+        return PAL[ix];
+      })
+      .attr("fill-opacity", function (d) { return d.n ? oScale(d.n) : 1; })
+      .attr("stroke", function (d) { return d.n ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.08)"; })
+      .attr("stroke-width", function (d) { return d.n ? 1.05 : 0.75; })
+      .style("cursor", "pointer")
+      .on("click", function (ev, d) {
+        setFilter(F.关系, d.rel);
+        setFilter(F.场景, d.scene);
+      })
+      .on("mouseenter", function (ev, d) {
+        svg.classed("s3-has-hover", true);
+        rects.classed("s3-focus", function (dd) { return dd === d; });
+        tipShow(ev, esc(String(d.rel)) + "<br>" + esc(String(d.scene)) + "<br>n=" + d.n + (d.n ? "<br>格内主「" + F.社交 + "」" + esc(String(d.topSoc)) : ""));
+      })
+      .on("mousemove", moveTip)
+      .on("mouseleave", function () {
+        svg.classed("s3-has-hover", false);
+        rects.classed("s3-focus", false);
+        tipHide();
+      });
+
+    svg.append("g").attr("class", "s3-rs-heat-lab").selectAll("text.rscl").data(cells.filter(function (d) { return d.n > 0; })).enter().append("text").attr("class", "rscl")
+      .attr("x", function (d) { return m.l + d.ci * cw + cw / 2; })
+      .attr("y", function (d) { return m.t + d.ri * cellH + cellH / 2 - 5; })
+      .attr("text-anchor", "middle").attr("fill", "rgba(252,252,255,0.95)").style("font-size", "8px").style("font-weight", "700")
+      .style("pointer-events", "none")
+      .text(function (d) { return d.n > 999 ? "999+" : String(d.n); });
+
+    svg.append("g").selectAll("text.rscs").data(cells.filter(function (d) { return d.n > 0 && cw > 52; })).enter().append("text").attr("class", "rscs")
+      .attr("x", function (d) { return m.l + d.ci * cw + cw / 2; })
+      .attr("y", function (d) { return m.t + d.ri * cellH + cellH / 2 + 8; })
+      .attr("text-anchor", "middle").attr("fill", "rgba(220,220,232,0.88)").style("font-size", "6.5px")
+      .style("pointer-events", "none")
+      .text(function (d) { return s2ShortKey(d.topSoc, 8); });
+
+    runWhenChartSvgVisible(container, function () {
+      rects.transition().duration(480).ease(d3.easeCubicOut).delay(function (d) { return (d.ri + d.ci) * 12; })
+        .attr("stroke", function (d) { return d.n ? "rgba(255,255,255,0.34)" : "rgba(255,255,255,0.11)"; });
+    });
+
+    s2AxisTitleX(svg, m.l + plotW / 2, h - 52, "热力格：行=「" + F.关系 + "」、列=「" + F.场景 + "」；饱和度∝交叉 n；色相≈该格样本中占比最高的「" + F.社交 + "」");
+    s2AxisTitleY(svg, 22, m.t + plotH / 2, "纵轴：离散行=各关系类目；横轴：离散列=各场景类目");
+    s2AxisDimNotes(svg, h - 12,
+      "横轴：列索引 0—" + (topS.length - 1) + " 对应 Top 场景（列宽约 " + Math.round(cw) + "px）。",
+      "纵轴：行索引 0—" + (topR.length - 1) + " 对应 Top 关系；每格高度 " + cellH + "px。");
+    s2MiniDenseCaption(svg, w, rows, [], { tx: w - 14, ty: h - 70, anchor: "end", lineDy: 14, skipStats: true });
+    setFigCaptionLegend(container, [
+      { hex: PAL[0], text: "色相→社交主类" },
+      { hex: "rgba(80,80,95,0.8)", text: "灰格=无样本" }
+    ], "图注：与下一屏「关系→风险曲线束」形式不同；一格内三色由该子样本的社交功能众数决定。点击格双筛关系+场景。\n" + captionSampleLine(rows));
+  }
+
+  /** 06：关系 → 风险 桑基式曲线束（线宽∝条数；悬停单束高亮） */
+  function s3ChartStackRelRisk(container, rows) {
+    var relAgg = aggregate(rows, F.关系).sort(function (a, b) { return b.count - a.count; }).slice(0, 9);
+    if (!relAgg.length) return;
+    var riskOrder = ["低", "中", "高"];
+    var stackData = relAgg.map(function (d) {
+      var slice = rows.filter(function (r) { return norm(r[F.关系]) === norm(d.key); });
+      var o = { 关系: d.key };
+      riskOrder.forEach(function (rk) {
+        o[rk] = slice.filter(function (r) { return norm(r[F.风险]).indexOf(rk) >= 0; }).length;
+      });
+      return o;
+    });
+    var w = chartBoxW(container);
+    var m = { t: 52, l: 168, r: 120, b: 120 };
+    var rowH = 54;
+    var plotH = stackData.length * rowH;
+    var h = m.t + plotH + m.b;
+    var plotW = w - m.l - m.r;
+    var xL = m.l + 8;
+    var xR = m.l + plotW - 4;
+    var xM = m.l + plotW * 0.52;
+    var riskColors = { 低: PAL[1], 中: PAL[3], 高: PAL[0] };
+    var maxL = 1;
+    var links = [];
+    stackData.forEach(function (row, i) {
+      var yL = m.t + i * rowH + rowH / 2;
+      riskOrder.forEach(function (rk, ri) {
+        var cnt = row[rk];
+        if (cnt < 1) return;
+        if (cnt > maxL) maxL = cnt;
+        links.push({ rel: row.关系, rk: rk, cnt: cnt, yL: yL + (ri - 1) * 9, yR: m.t + (ri + 0.65) / 3.2 * plotH });
+      });
+    });
+    var sw = d3.scaleSqrt().domain([1, maxL]).range([1.2, 14]);
+    var svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    var gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    s2FineGridXY(gridG, m.l, m.t, m.l + plotW, m.t + plotH, 20, stackData.length * 3);
+    riskOrder.forEach(function (rk, ri) {
+      var yr = m.t + (ri + 0.65) / 3.2 * plotH;
+      svg.append("text").attr("x", xR + 8).attr("y", yr + 4).attr("fill", riskColors[rk]).style("font-size", "9px").style("font-weight", "700").text("风险·" + rk);
+    });
+    stackData.forEach(function (row, i) {
+      var yBand = m.t + i * rowH;
+      svg.append("rect").attr("x", m.l).attr("y", yBand + 3).attr("width", plotW).attr("height", rowH - 6)
+        .attr("rx", 3).attr("fill", "rgba(255,255,255,0.03)").attr("stroke", "rgba(255,255,255,0.05)").attr("pointer-events", "none");
+      var totR = riskOrder.reduce(function (s, k) { return s + row[k]; }, 0);
+      svg.append("text").attr("x", m.l - 8).attr("y", yBand + rowH / 2 + 4).attr("text-anchor", "end").attr("fill", "#c8c8d8").style("font-size", "8.5px")
+        .text(String(row.关系).length > 14 ? String(row.关系).slice(0, 13) + "…" : row.关系);
+      svg.append("text").attr("x", xL - 2).attr("y", yBand + rowH / 2 + 4).attr("text-anchor", "end").attr("fill", "#6e6e7e").style("font-size", "7px").text("Σ" + totR);
+    });
+    function pathD(d) {
+      return "M" + xL + "," + d.yL + " C" + xM + "," + d.yL + " " + xM + "," + d.yR + " " + xR + "," + d.yR;
+    }
+    var linkLayer = svg.append("g").attr("class", "s3-flow-layer");
+    var paths = linkLayer.selectAll("path.s3flow").data(links).enter().append("path").attr("class", "s3flow s3-fade")
+      .attr("fill", "none").attr("stroke", function (d) { return riskColors[d.rk] || PAL[2]; })
+      .attr("stroke-opacity", 0.38).attr("stroke-linecap", "round").style("cursor", "pointer")
+      .attr("d", pathD)
+      .attr("stroke-width", 0)
+      .on("click", function (ev, d) {
+        setFilter(F.关系, d.rel);
+        setFilter(F.风险, d.rk);
+      })
+      .on("mouseenter", function (ev, d) {
+        svg.classed("s3-has-hover", true);
+        paths.classed("s3-focus", function (dd) { return dd === d; });
+        var row = stackData.filter(function (r) { return norm(r.关系) === norm(d.rel); })[0];
+        var rowTot = row ? riskOrder.reduce(function (s, k) { return s + row[k]; }, 0) : 1;
+        var pct = Math.round(d.cnt / rowTot * 1000) / 10;
+        tipShow(ev, esc(String(d.rel)) + "<br>风险「" + esc(d.rk) + "」 " + d.cnt + " 条 · 占该行 " + pct + "%");
+      })
+      .on("mousemove", moveTip)
+      .on("mouseleave", function () {
+        svg.classed("s3-has-hover", false);
+        paths.classed("s3-focus", false);
+        tipHide();
+      });
+    runWhenChartSvgVisible(container, function () {
+      paths.transition().duration(680).ease(d3.easeCubicOut).delay(function (d, i) { return i * 18; })
+        .attr("stroke-width", function (d) { return sw(d.cnt); });
+    });
+    s2AxisTitleX(svg, m.l + plotW / 2, 32, "左列=关系对象行；右列=风险三档落点；曲线束宽∝该交叉条数");
+    s2AxisTitleY(svg, 20, m.t + plotH / 2, "非堆叠条：同屏看「谁流向哪档风险」");
+    s2AxisDimNotes(svg, h - 12,
+      "横轴：左端 x≈" + xL + " 为曲线起点（字段「" + F.关系 + "」各行）；右端 x≈" + xR + " 为落点（字段「" + F.风险 + "」低/中/高三档）；中段为过渡区无类目刻度。",
+      "纵轴：y≈" + m.t + "—" + (m.t + plotH) + " px，每行对应一个关系对象；行内曲线端点的细调 y 映射到风险档位的垂直位置。");
+    s2MiniDenseCaption(svg, w, rows, [], { tx: 16, ty: h - 58, anchor: "start", lineDy: 14, skipStats: true });
+    var legSt = riskOrder.map(function (k) { return { hex: riskColors[k], text: k + " 风险（线色）" }; });
+    legSt.unshift({ hex: "#888", text: "悬停单束：其余淡化" });
+    setFigCaptionLegend(container, legSt,
+      "图注：与横向堆叠条信息等价，但强调跨列分配；线宽用√条数避免极值糊屏。点击曲线双筛。\n" + captionSampleLine(rows));
+  }
+
+  /** 07：中线发散条 — 每行=阶段；左=黑白、右=彩色，长度∝条数；渐变由中轴向两侧加深 */
+  function s3ChartGroupedBWBySub(container, rows) {
+    var subs = sortPhases(aggregate(rows, F.细分).filter(function (d) { return d.count > 0; }));
+    if (!subs.length) return;
+    var rowDat = subs.map(function (s) {
+      var slice = rows.filter(function (r) { return norm(r[F.细分]) === norm(s.key); });
+      var nB = slice.filter(function (r) { return norm(r[F.黑白]) === norm("黑白"); }).length;
+      var nC = slice.filter(function (r) { return norm(r[F.黑白]) === norm("彩色"); }).length;
+      return { key: s.key, nB: nB, nC: nC, sum: nB + nC };
+    });
+    var maxSide = d3.max(rowDat, function (d) { return Math.max(d.nB, d.nC); }) || 1;
+    var w = chartBoxW(container);
+    var m = { t: 52, l: 168, r: 56, b: 126 };
+    var rowH = 58;
+    var plotH = subs.length * rowH;
+    var h = m.t + plotH + m.b;
+    var plotW = w - m.l - m.r;
+    var xMid = m.l + plotW / 2;
+    var half = plotW / 2 - 14;
+    var xS = d3.scaleLinear().domain([0, maxSide]).range([0, half]);
+    var svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    var defs = svg.append("defs");
+    var gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    s2FineGridXY(gridG, m.l, m.t, m.l + plotW, m.t + plotH, 24, subs.length * 3);
+    svg.append("line").attr("x1", xMid).attr("x2", xMid).attr("y1", m.t - 4).attr("y2", m.t + plotH + 4)
+      .attr("stroke", "rgba(255,255,255,0.16)").attr("stroke-width", 1).attr("stroke-dasharray", "4 5").attr("pointer-events", "none");
+    svg.append("text").attr("x", xMid - 8).attr("y", m.t - 10).attr("text-anchor", "end").attr("fill", "#7e7e8e").style("font-size", "7px").text("黑白");
+    svg.append("text").attr("x", xMid + 8).attr("y", m.t - 10).attr("text-anchor", "start").attr("fill", "#7e7e8e").style("font-size", "7px").text("彩色");
+    var bwTint = "#a8a8bc";
+    var colTint = PAL[3];
+    var animSegs = [];
+    rowDat.forEach(function (rd, i) {
+      var y0 = m.t + i * rowH;
+      if (i % 2 === 0) {
+        svg.append("rect").attr("x", m.l).attr("y", y0).attr("width", plotW).attr("height", rowH)
+          .attr("fill", "rgba(255,255,255,0.02)").attr("pointer-events", "none");
+      }
+      var gL = defs.append("linearGradient").attr("id", "s3dvB_" + i).attr("gradientUnits", "userSpaceOnUse")
+        .attr("x1", xMid).attr("x2", xMid - half - 20).attr("y1", 0).attr("y2", 0);
+      try {
+        var cB = d3.color(bwTint);
+        gL.append("stop").attr("offset", "0%").attr("stop-color", cB ? cB.copy({ opacity: 0.08 }).formatRgb() : "rgba(255,255,255,0.06)");
+        gL.append("stop").attr("offset", "100%").attr("stop-color", cB ? cB.copy({ opacity: 0.55 }).formatRgb() : "rgba(180,180,200,0.45)");
+      } catch (e1) {
+        gL.append("stop").attr("offset", "0%").attr("stop-color", "rgba(255,255,255,0.06)");
+        gL.append("stop").attr("offset", "100%").attr("stop-color", "rgba(160,160,188,0.5)");
+      }
+      var gR = defs.append("linearGradient").attr("id", "s3dvC_" + i).attr("gradientUnits", "userSpaceOnUse")
+        .attr("x1", xMid).attr("x2", xMid + half + 20).attr("y1", 0).attr("y2", 0);
+      try {
+        var cC = d3.color(colTint);
+        gR.append("stop").attr("offset", "0%").attr("stop-color", cC ? cC.copy({ opacity: 0.1 }).formatRgb() : "rgba(255,255,255,0.06)");
+        gR.append("stop").attr("offset", "100%").attr("stop-color", cC ? cC.copy({ opacity: 0.5 }).formatRgb() : "rgba(120,100,220,0.45)");
+      } catch (e2) {
+        gR.append("stop").attr("offset", "0%").attr("stop-color", "rgba(255,255,255,0.06)");
+        gR.append("stop").attr("offset", "100%").attr("stop-color", "rgba(108,88,238,0.48)");
+      }
+      var wB = xS(rd.nB);
+      var wC = xS(rd.nC);
+      var yb = y0 + 13;
+      var hb = 34;
+      var rectL = svg.append("rect").attr("class", "dvseg s3-fade").attr("y", yb).attr("height", hb).attr("rx", 4)
+        .attr("x", xMid - wB).attr("width", 0).attr("fill", "url(#s3dvB_" + i + ")").attr("stroke", "rgba(255,255,255,0.14)").attr("stroke-width", 0.7)
+        .style("cursor", "pointer")
+        .on("click", function () { setPhase(rd.key); setFilter(F.黑白, "黑白"); })
+        .on("mouseenter", function (ev) {
+          svg.classed("s3-has-hover", true);
+          d3.select(this).classed("s3-focus", true);
+          tipShow(ev, esc(String(rd.key)) + "<br>黑白 " + rd.nB + " 条");
+        })
+        .on("mousemove", moveTip)
+        .on("mouseleave", function () {
+          svg.classed("s3-has-hover", false);
+          svg.selectAll("rect.dvseg").classed("s3-focus", false);
+          tipHide();
+        });
+      rectL.classed("dvL", true);
+      var rectR = svg.append("rect").attr("class", "dvseg s3-fade").attr("y", yb).attr("height", hb).attr("rx", 4)
+        .attr("x", xMid).attr("width", 0).attr("fill", "url(#s3dvC_" + i + ")").attr("stroke", "rgba(255,255,255,0.14)").attr("stroke-width", 0.7)
+        .style("cursor", "pointer")
+        .on("click", function () { setPhase(rd.key); setFilter(F.黑白, "彩色"); })
+        .on("mouseenter", function (ev) {
+          svg.classed("s3-has-hover", true);
+          d3.select(this).classed("s3-focus", true);
+          tipShow(ev, esc(String(rd.key)) + "<br>彩色 " + rd.nC + " 条");
+        })
+        .on("mousemove", moveTip)
+        .on("mouseleave", function () {
+          svg.classed("s3-has-hover", false);
+          svg.selectAll("rect.dvseg").classed("s3-focus", false);
+          tipHide();
+        });
+      rectR.classed("dvR", true);
+      svg.append("text").attr("x", m.l - 8).attr("y", y0 + rowH / 2 + 4).attr("text-anchor", "end").attr("fill", "#c8c8d8").style("font-size", "8.5px")
+        .text(String(rd.key).length > 15 ? String(rd.key).slice(0, 14) + "…" : rd.key);
+      animSegs.push({ rectL: rectL, rectR: rectR, wB: wB, wC: wC, i: i });
+      if (wB > 22) {
+        svg.append("text").attr("x", xMid - wB + 6).attr("y", yb + hb / 2 + 4).attr("fill", "rgba(248,248,252,0.88)").style("font-size", "7.5px").style("font-weight", "600").style("pointer-events", "none").text(rd.nB);
+      }
+      if (wC > 22) {
+        svg.append("text").attr("x", xMid + wC - 6).attr("y", yb + hb / 2 + 4).attr("text-anchor", "end").attr("fill", "rgba(248,248,252,0.88)").style("font-size", "7.5px").style("font-weight", "600").style("pointer-events", "none").text(rd.nC);
+      }
+    });
+    runWhenChartSvgVisible(container, function () {
+      animSegs.forEach(function (o) {
+        o.rectL.transition().delay(o.i * 55).duration(560).ease(d3.easeCubicOut).attr("width", o.wB);
+        o.rectR.transition().delay(o.i * 55 + 40).duration(560).ease(d3.easeCubicOut).attr("width", o.wC);
+      });
+    });
+    s2AxisTitleX(svg, m.l + plotW / 2, h - 34, "中线=分界；左右条长=该阶段黑白/彩色绝对条数（同轴可比最大值 " + maxSide + "）");
+    s2AxisTitleY(svg, 22, m.t + plotH / 2, "非旭日：扁平发散条，填充为轴向渐变而非平涂");
+    s2AxisDimNotes(svg, h - 12,
+      "横轴：以中轴 x=" + Math.round(xMid) + " 为 0；向左、向右为条长像素，线性映射 0—" + maxSide + " 条（字段「" + F.黑白 + "」两类计数）。",
+      "纵轴：每一行 y 对应字段「" + F.细分 + "」的一个阶段；行距固定 " + rowH + " px，自上而下为阶段顺序。");
+    s2MiniDenseCaption(svg, w, rows, [], { tx: 16, ty: h - 58, anchor: "start", lineDy: 14, skipStats: true });
+    setFigCaptionLegend(container, [
+      { hex: "rgba(168,168,188,0.55)", text: "左渐层=黑白" },
+      { hex: "rgba(108,88,238,0.5)", text: "右渐层=彩色" },
+      { hex: "#888", text: "悬停单侧高亮" }
+    ], "图注：点击左/右条分别筛「阶段+黑白/彩色」。配色刻意做淡，避免大块饱和色。\n" + captionSampleLine(rows));
+  }
+
+  /** 08：径向条形 — 角位=场景，径长∝条数；悬停单条高亮 */
+  function s3ChartLollipopSocialScene(container, rows) {
+    var agg = aggregate(rows, F.场景).filter(function (d) { return d.count > 0; }).sort(function (a, b) { return b.count - a.count; }).slice(0, 12);
+    if (!agg.length) return;
+    var w = chartBoxW(container);
+    var h = 540;
+    var cx = w / 2;
+    var cy = h / 2 - 6;
+    var innerR = 62;
+    var band = Math.min(w, h) * 0.36 - innerR;
+    var maxC = d3.max(agg, function (d) { return d.count; }) || 1;
+    var rOut = d3.scaleLinear().domain([0, maxC]).range([innerR, innerR + band]);
+    var ang = d3.scaleBand().domain(agg.map(function (d) { return d.key; })).range([0, 2 * Math.PI]).paddingInner(0.14);
+    var svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg").attr("width", w).attr("height", h);
+    var gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    s2FineGridXY(gridG, cx - innerR - band - 30, cy - innerR - band - 30, cx + innerR + band + 30, cy + innerR + band + 30, 20, 16);
+    var g = svg.append("g").attr("transform", "translate(" + cx + "," + cy + ")");
+    var arcBar = d3.arc().innerRadius(innerR).startAngle(function (d) { return ang(d.key) - Math.PI / 2; })
+      .endAngle(function (d) { return ang(d.key) + ang.bandwidth() - Math.PI / 2; }).padAngle(0.015);
+    var bars = g.selectAll("path.radbar").data(agg).enter().append("path").attr("class", "radbar s3-fade")
+      .attr("fill", function (d, i) { return PAL[i % 4]; })
+      .attr("stroke", "rgba(6,6,12,0.9)").attr("stroke-width", 0.9).style("cursor", "pointer")
+      .attr("d", function (d) { return arcBar.outerRadius(innerR)(d); })
+      .on("click", function (ev, d) { setFilter(F.场景, d.key); })
+      .on("mouseenter", function (ev, d) {
+        svg.classed("s3-has-hover", true);
+        d3.select(this).classed("s3-focus", true);
+        var pctM = Math.round(d.count / maxC * 1000) / 10;
+        tipShow(ev, esc(String(d.key)) + "<br>" + d.count + " 条 · 相对最大 " + pctM + "%");
+      })
+      .on("mousemove", moveTip)
+      .on("mouseleave", function () {
+        svg.classed("s3-has-hover", false);
+        bars.classed("s3-focus", false);
+        tipHide();
+      });
+    runWhenChartSvgVisible(container, function () {
+      bars.transition().duration(680).ease(d3.easeCubicOut).delay(function (d, i) { return i * 40; })
+        .attrTween("d", function (d) {
+          var rT = rOut(d.count);
+          var inter = d3.interpolate(innerR, rT);
+          return function (t) { return arcBar.outerRadius(inter(t))(d); };
+        });
+    });
+    [0.25, 0.5, 0.75, 1].forEach(function (frac) {
+      g.append("circle").attr("r", innerR + band * frac).attr("fill", "none")
+        .attr("stroke", frac >= 1 ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)").attr("stroke-width", frac >= 1 ? 0.9 : 0.45)
+        .attr("stroke-dasharray", frac >= 1 ? "none" : "4 7").attr("pointer-events", "none");
+    });
+    g.append("circle").attr("r", innerR - 2).attr("fill", "rgba(10,12,18,0.94)").attr("stroke", CHART_AXIS_DOMAIN_STROKE).attr("stroke-width", 1);
+    g.append("text").attr("text-anchor", "middle").attr("dy", "-0.1em").attr("fill", "#b8b8c8").style("font-size", "8px").style("font-weight", "700").text("场景 Top12");
+    agg.forEach(function (d, i) {
+      var aMid = ang(d.key) + ang.bandwidth() / 2 - Math.PI / 2;
+      var rr = innerR + band + 18;
+      var lx = Math.cos(aMid) * rr;
+      var ly = Math.sin(aMid) * rr;
+      g.append("text").attr("x", lx).attr("y", ly).attr("text-anchor", Math.cos(aMid) >= 0 ? "start" : "end").attr("dy", "0.35em")
+        .attr("fill", "#d0d0dc").style("font-size", "7.5px").style("pointer-events", "none").text(s2ShortKey(d.key, 10));
+    });
+    s2AxisTitleX(svg, w / 2, h - 32, "径向条：角位=类目，外伸=条数；虚线环=最大径的 25/50/75/100%");
+    s2AxisTitleY(svg, 22, cy, "非横向棒棒糖：极坐标下读扇形条");
+    s2AxisDimNotes(svg, h - 12,
+      "角向（类比横轴）：θ 为字段「" + F.场景 + "」Top12 类目的扇区中心角；无直线 x 刻度，读外圈文字。",
+      "径向（类比纵轴）：r 从 " + innerR + "px 向外增至 " + Math.round(innerR + band) + "px，外半径映射该类目条数 0—" + maxC + "；虚线环为满量程的 25/50/75/100%。");
+    s2MiniDenseCaption(svg, w, rows, [], { tx: 16, ty: h - 58, anchor: "start", lineDy: 14, skipStats: true });
+    var legL = agg.slice(0, 8).map(function (d, i) { return { hex: PAL[i % 4], text: s2ShortKey(d.key, 12) }; });
+    legL.unshift({ hex: "#888", text: "条色=场景" });
+    setFigCaptionLegend(container, legL,
+      "图注：与水平棒棒糖数据映射一致，但用极坐标压缩纵轴标签占用，外圈标签随角位辐射。点击扇形条筛场景。\n" + captionSampleLine(rows));
+  }
+
+  /** 09：表达直接性 × 社交场景 — 矩阵气泡 + Delaunay 近邻与十字准线 */
+  function s3ChartMatrixBubbleDirectScene(container, rows) {
+    var topS = aggregate(rows, F.场景).sort(function (a, b) { return b.count - a.count; }).slice(0, 6).map(function (d) { return d.key; });
+    var dirs = aggregate(rows, F.直接).filter(function (d) { return d.count > 0; }).sort(function (a, b) { return b.count - a.count; });
+    if (!topS.length || !dirs.length) return;
+    var w = chartBoxW(container);
+    var m = { t: 96, l: 108, r: 52, b: 218 };
+    var cw = (w - m.l - m.r) / dirs.length;
+    var ch = 68;
+    var bubbleCyShift = 8;
+    var plotH = topS.length * ch;
+    var h = m.t + plotH + m.b;
+    var maxN = 1;
+    var allCells = [];
+    topS.forEach(function (sc, i) {
+      dirs.forEach(function (dv, j) {
+        var n = rows.filter(function (r) {
+          return norm(r[F.场景]) === norm(sc) && norm(r[F.直接]) === norm(dv.key);
+        }).length;
+        if (n > maxN) maxN = n;
+        allCells.push({ sc: sc, dk: dv.key, n: n, i: i, j: j });
+      });
+    });
+    maxN = Math.max(maxN, 1);
+    var colSum = {};
+    dirs.forEach(function (dv) {
+      colSum[dv.key] = d3.sum(topS, function (sc) {
+        return rows.filter(function (r) {
+          return norm(r[F.场景]) === norm(sc) && norm(r[F.直接]) === norm(dv.key);
+        }).length;
+      });
+    });
+    var rMax = Math.min(cw, ch) * 0.38;
+    var plotWm = dirs.length * cw;
+    var svg = d3.select(container).append("svg").attr("class", "chart-svg chart-pixel-svg s3-chart--matrix").attr("width", w).attr("height", h);
+    var defs = svg.append("defs");
+    var glowM = defs.append("filter").attr("id", "s3mbGlow").attr("x", "-55%").attr("y", "-55%").attr("width", "210%").attr("height", "210%");
+    glowM.append("feGaussianBlur").attr("stdDeviation", 2.45).attr("result", "b");
+    var mg = glowM.append("feMerge");
+    mg.append("feMergeNode").attr("in", "b");
+    mg.append("feMergeNode").attr("in", "SourceGraphic");
+    var patMb = defs.append("pattern").attr("id", "s3mbPatEmpty").attr("width", 12).attr("height", 12).attr("patternUnits", "userSpaceOnUse");
+    patMb.append("rect").attr("width", 12).attr("height", 12).attr("fill", "rgba(14,16,26,0.94)");
+    patMb.append("circle").attr("cx", 3).attr("cy", 3).attr("r", 0.7).attr("fill", "rgba(255,255,255,0.045)");
+    patMb.append("circle").attr("cx", 9).attr("cy", 9).attr("r", 0.7).attr("fill", "rgba(255,255,255,0.045)");
+    var lgMbFrame = defs.append("linearGradient").attr("id", "s3mbPlotFrame").attr("x1", "0%").attr("y1", "100%").attr("x2", "100%").attr("y2", "0%");
+    lgMbFrame.append("stop").attr("offset", "0%").attr("stop-color", "rgba(245,69,149,0.42)");
+    lgMbFrame.append("stop").attr("offset", "52%").attr("stop-color", "rgba(108,88,238,0.45)");
+    lgMbFrame.append("stop").attr("offset", "100%").attr("stop-color", "rgba(89,226,253,0.4)");
+
+    var mbBack = svg.append("g").attr("class", "s3-mb-back").attr("pointer-events", "none");
+    topS.forEach(function (unused, ii) {
+      if (ii % 2 === 0) {
+        mbBack.append("rect").attr("x", m.l).attr("y", m.t + ii * ch).attr("width", plotWm).attr("height", ch)
+          .attr("fill", "rgba(255,255,255,0.032)");
+      }
+    });
+    mbBack.append("rect").attr("x", m.l - 2).attr("y", m.t - 30).attr("width", plotWm + 4).attr("height", plotH + 32)
+      .attr("rx", 8).attr("fill", "rgba(8,10,18,0.55)").attr("stroke", "rgba(255,255,255,0.06)").attr("stroke-width", 1);
+    mbBack.append("rect").attr("x", m.l - 2).attr("y", m.t - 2).attr("width", plotWm + 4).attr("height", plotH + 4)
+      .attr("rx", 7).attr("fill", "none").attr("stroke", "url(#s3mbPlotFrame)").attr("stroke-width", 1.55);
+    mbBack.append("rect").attr("x", m.l - 0.75).attr("y", m.t - 0.75).attr("width", plotWm + 1.5).attr("height", plotH + 1.5)
+      .attr("rx", 6).attr("fill", "none").attr("stroke", "rgba(255,255,255,0.14)").attr("stroke-width", 0.8);
+
+    var gridG = svg.append("g").attr("class", "chart-grid-layer").attr("pointer-events", "none");
+    s2FineGridXY(gridG, m.l, m.t, m.l + dirs.length * cw, m.t + plotH, dirs.length * 6, topS.length * 4);
+    allCells.forEach(function (cell) {
+      var gx = m.l + cell.j * cw + 3;
+      var gy = m.t + cell.i * ch + 3;
+      var ccol = d3.color(PAL[cell.j % 4]);
+      var fillCell = cell.n > 0
+        ? (ccol ? ccol.copy({ opacity: 0.13 }).formatRgb() : "rgba(108,88,238,0.13)")
+        : "url(#s3mbPatEmpty)";
+      svg.append("rect").attr("class", "mb-cell-bg").attr("x", gx).attr("y", gy).attr("width", cw - 6).attr("height", ch - 6).attr("rx", 6)
+        .attr("fill", fillCell)
+        .attr("stroke", cell.n > 0 ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.065)")
+        .attr("stroke-width", cell.n > 0 ? 1.08 : 0.82).attr("pointer-events", "none");
+    });
+    dirs.forEach(function (dv, j) {
+      var lab = String(dv.key).length > 6 ? String(dv.key).slice(0, 5) + "…" : dv.key;
+      var tc = d3.color(PAL[j % 4]);
+      var tfill = tc ? tc.copy({ opacity: 0.95 }).formatRgb() : "#b8b8c8";
+      svg.append("text").attr("x", m.l + j * cw + cw / 2).attr("y", m.t - 26).attr("text-anchor", "middle").attr("fill", "#8e8e9e").style("font-size", "7.5px").style("font-weight", "600").text("Σ" + colSum[dv.key]);
+      svg.append("text").attr("x", m.l + j * cw + cw / 2).attr("y", m.t - 10).attr("text-anchor", "middle").attr("fill", tfill).style("font-size", "8.5px").style("font-weight", "700").text(lab);
+    });
+    topS.forEach(function (sc, i) {
+      svg.append("text").attr("x", m.l - 10).attr("y", m.t + i * ch + ch / 2 + 4).attr("text-anchor", "end").attr("fill", "#d6d6e4").style("font-size", "8.5px").style("font-weight", "600")
+        .text(String(sc).length > 12 ? String(sc).slice(0, 11) + "…" : sc);
+    });
+    var rScale = d3.scaleSqrt().domain([1, Math.max(2, maxN)]).range([6, rMax]);
+    var withData = allCells.filter(function (d) { return d.n > 0; });
+    var plotX1 = m.l + dirs.length * cw;
+    var plotY1 = m.t + plotH;
+    var centers = withData.map(function (d) {
+      return [m.l + d.j * cw + cw / 2, m.t + d.i * ch + ch / 2 - bubbleCyShift];
+    });
+    var delaunay = centers.length ? d3.Delaunay.from(centers) : null;
+    var circs;
+    var crossG;
+    function mbFocusCell(d) {
+      if (!circs || !crossG) return;
+      if (!d) {
+        svg.classed("s3-has-hover", false);
+        circs.classed("s3-focus", false);
+        crossG.style("opacity", 0);
+        return;
+      }
+      svg.classed("s3-has-hover", true);
+      circs.classed("s3-focus", function (dd) { return dd === d; });
+      var cy0 = m.t + d.i * ch + ch / 2 - bubbleCyShift;
+      var cx0 = m.l + d.j * cw + cw / 2;
+      crossG.select(".mb-row").attr("x1", m.l).attr("x2", plotX1).attr("y1", cy0).attr("y2", cy0);
+      crossG.select(".mb-col").attr("x1", cx0).attr("x2", cx0).attr("y1", m.t).attr("y2", plotY1);
+      crossG.style("opacity", 1);
+    }
+    circs = svg.selectAll("circle.mbds").data(withData).enter().append("circle").attr("class", "mbds s3-fade")
+      .attr("cx", function (d) { return m.l + d.j * cw + cw / 2; })
+      .attr("cy", function (d) { return m.t + d.i * ch + ch / 2 - bubbleCyShift; })
+      .attr("r", 0)
+      .attr("fill", function (d) { return PAL[d.j % 4]; })
+      .attr("fill-opacity", 0.82)
+      .attr("stroke", "rgba(255,255,255,0.58)").attr("stroke-width", 1.15).style("cursor", "pointer")
+      .style("filter", "url(#s3mbGlow)")
+      .on("click", function (ev, d) { setFilter(F.场景, d.sc); setFilter(F.直接, d.dk); })
+      .on("mouseenter", function (ev, d) {
+        mbFocusCell(d);
+        var pc = colSum[d.dk] ? Math.round(d.n / colSum[d.dk] * 1000) / 10 : 0;
+        tipShow(ev, "场景 " + esc(String(d.sc)) + "<br>直接性 " + esc(String(d.dk)) + "<br>n=" + d.n + " · 占该列 " + pc + "%");
+      })
+      .on("mousemove", moveTip)
+      .on("mouseleave", function () {
+        mbFocusCell(null);
+        tipHide();
+      });
+    crossG = svg.append("g").attr("class", "mb-crosshair").attr("pointer-events", "none").style("opacity", 0);
+    crossG.append("line").attr("class", "mb-row").attr("stroke", "rgba(89,226,253,0.42)").attr("stroke-width", 1.25).attr("stroke-dasharray", "5 4");
+    crossG.append("line").attr("class", "mb-col").attr("stroke", "rgba(252,229,0,0.38)").attr("stroke-width", 1.25).attr("stroke-dasharray", "5 4");
+    if (delaunay) {
+      svg.on("mousemove.mbvor", function (ev) {
+        if (!centers.length) return;
+        var pt = d3.pointer(ev);
+        var idx = delaunay.find(pt[0], pt[1]);
+        if (idx < 0 || idx >= withData.length) return;
+        var near = withData[idx];
+        var c = centers[idx];
+        var dx = pt[0] - c[0];
+        var dy = pt[1] - c[1];
+        if (dx * dx + dy * dy > (rScale(near.n) + 28) * (rScale(near.n) + 28)) {
+          mbFocusCell(null);
+          tipHide();
+          return;
+        }
+        mbFocusCell(near);
+        var pc = colSum[near.dk] ? Math.round(near.n / colSum[near.dk] * 1000) / 10 : 0;
+        tipShow(ev, "场景 " + esc(String(near.sc)) + "<br>直接性 " + esc(String(near.dk)) + "<br>n=" + near.n + " · 占该列 " + pc + "%");
+        moveTip(ev);
+      });
+      svg.on("mouseleave.mbvor", function () {
+        mbFocusCell(null);
+        tipHide();
+      });
+    }
+    svg.selectAll("text.mbvn").data(allCells).enter().append("text").attr("class", "mbvn")
+      .attr("x", function (d) { return m.l + d.j * cw + cw / 2; })
+      .attr("y", function (d) { return m.t + d.i * ch + ch - 18; })
+      .attr("text-anchor", "middle").attr("fill", function (d) { return d.n > 0 ? "#a8a8b8" : "#4e4e5c"; })
+      .style("font-size", "8px").style("pointer-events", "none")
+      .text(function (d) { return d.n > 0 ? "n=" + d.n : "—"; });
+    runWhenChartSvgVisible(container, function () {
+      circs.transition().delay(function (d) { return d.i * 48 + d.j * 32; }).duration(520).ease(d3.easeCubicOut)
+        .attr("r", function (d) { return rScale(d.n); });
+    });
+    var r1 = rScale(Math.max(1, Math.round(maxN * 0.33)));
+    var r2 = rScale(Math.max(1, Math.round(maxN * 0.66)));
+    var r3 = rScale(maxN);
+    var rLegMax = Math.max(r1, r2, r3) + 2;
+    var legTitleY = m.t + plotH + 26;
+    var legCircleCy = legTitleY + 22 + rLegMax;
+    var legLabY = legCircleCy + rLegMax + 12;
+    var lx0 = m.l + 20;
+    svg.append("text").attr("x", lx0).attr("y", legTitleY).attr("fill", "#9a9aac").style("font-size", "8.5px").style("font-weight", "600").text("面积标尺（√刻度）");
+    [ { r: r1, lab: "~33%" }, { r: r2, lab: "~66%" }, { r: r3, lab: "max" } ].forEach(function (item, ii) {
+      var cx = lx0 + 118 + ii * 72;
+      svg.append("circle").attr("cx", cx).attr("cy", legCircleCy).attr("r", item.r + 1.2).attr("fill", "none").attr("stroke", "rgba(255,255,255,0.12)").attr("stroke-width", 0.65);
+      svg.append("circle").attr("cx", cx).attr("cy", legCircleCy).attr("r", item.r).attr("fill", "rgba(108,88,238,0.42)").attr("stroke", "rgba(255,255,255,0.42)").attr("stroke-width", 0.95);
+      svg.append("text").attr("x", cx).attr("y", legLabY).attr("text-anchor", "middle").attr("fill", "#7c7c8e").style("font-size", "7.5px").style("font-weight", "600").text(item.lab);
+    });
+    s2AxisTitleX(svg, m.l + (dirs.length * cw) / 2, h - 36, "横轴：直接性；近邻 Voronoi 命中+十字准线；气泡=√条数");
+    s2AxisTitleY(svg, 28, m.t + plotH / 2, "纵轴：社交场景（Top6）");
+    s2AxisDimNotes(svg, h - 14,
+      "横轴：字段「" + F.直接 + "」各档位各占一列，列宽 " + Math.round(cw) + " px；列内 x 为抖动散点或气泡中心的像素位置。",
+      "纵轴：字段「" + F.场景 + "」Top" + topS.length + " 各行，行高 " + ch + " px；气泡半径映射交叉样本数 n 的平方根（最大 n=" + maxN + "）。");
+    s2MiniDenseCaption(svg, w, rows, [], { tx: 16, ty: h - 52, anchor: "start", lineDy: 14, skipStats: true });
+    setFigCaptionLegend(container, [
+      { hex: PAL[0], text: "列色=直接性" },
+      { hex: "rgba(108,88,238,0.4)", text: "格底灰字=无样本" }
+    ], "图注：空白格区移动鼠标会吸附最近气泡并画行列十字线，读交叉更省力。点击圆双筛。\n" + captionSampleLine(rows));
+  }
+
+  let narrativeLayerCleanup = null;
+  let narrativeLastIdx = -1;
+  let narrativeTick = 0;
+
+  const CHART_NARRATIVE_TEXTS = [
+    "【数据总结·表达直接性】\n间接与半直接占比较高，「明说」相对少；表情包承担缓冲与转义。\n\n【对应本图】\n黄金角螺旋点云：每点一样本、半透明色相区分直接性；悬停同类高亮；点击筛档位。",
+    "【数据总结·细分阶段】\n六阶段推进中，聊天落点从朋友群、班级群向评论区、礼貌往来等场景迁移；同一阶段内黑白梗图与彩色图并存度随修辞复杂度变化。\n\n【对应本图】\n矩阵：横轴六阶段、纵轴社交场景；格内铺该交叉下全部有图样本，方形边长∝√文字字数，灰/青描边区分黑白图与彩色图；点击单图筛阶段+场景。",
+    "【数据总结·原情×包后】\n原始情绪与包装后表达存在稳定迁移路径，自嘲、阴阳、礼貌壳等是高频落点。\n\n【对应本图】\n二分弦图：丝带依次淡入；专用 CSS 高亮避免频闪；丝带宽∝交叉 n；悬停丝带或弧高亮；点击弧筛维度。",
+    "【数据总结·包装与真实感】\n包装度与「贴近真实情绪指数」同现：高包装未必低真实，需结合社交功能读。\n\n【对应本图】\n列内半透明密度带+抖动散点+列均值线+全样本中位线；点半径∝√字数；悬停同列高亮。",
+    "【数据总结·社交功能】\n轻吐槽、围观附和、自嘲摆烂、阴阳怪气等功能并存，构成当下接话生态。\n\n【对应本图】\n关系×场景热力矩阵：格内数字为交叉条数，颜色饱和度随 n 变化，色相对应格内主导「社交功能」；点击格筛关系与场景。",
+    "【数据总结·关系与风险】\n同学/同事与陌生网友占比高；高风险常与边界、婉拒或攻击性话术同现。\n\n【对应本图】\n桑基式曲线束：左=关系行、右=低/中/高落点，线宽∝交叉条数；悬停单束高亮；点击双筛。",
+    "【数据总结·色媒×阶段】\n黑白梗图与彩色图在不同细分阶段的配比，可对照模板化、婉拒等阶段的视觉策略。\n\n【对应本图】\n中线发散条：每行一阶段，左/右条长=黑白与彩色条数，轴向渐变淡化实心感；点击条双筛。",
+    "【数据总结·场景分布】\n班级群、朋友群、评论区、私聊等场景决定话轮密度与「壳」的厚度。\n\n【对应本图】\n径向条形：角位=场景 Top12、外伸∝条数，虚环刻度；悬停单条高亮；点击筛场景。",
+    "【数据总结·场景×直接性】\n同一场景下间接/直接配比不同：群聊接梗与礼貌往来对「明说」的容忍度不一。\n\n【对应本图】\n矩阵气泡+Delaunay 近邻吸附+行列十字线；气泡√面积；悬停占列%；点击圆双筛。"
+  ];
+
+  function formatNarrativeHtml(raw) {
+    var s = esc(String(raw || ""));
+    s = s.replace(/【([^】]*)】/g, '<span class="narr-btitle">【$1】</span>');
+    s = s.replace(/(\d+(?:\.\d+)?%)/g, '<span class="narr-hl narr-hl--y">$1</span>');
+    s = s.replace(/「([^」]+)」/g, '<span class="narr-hl narr-hl--p">「$1」</span>');
+    s = s.replace(/\n/g, "<br>");
+    return s;
+  }
+
+  function applyNarrativeText(innerEl, text, tk) {
+    if (tk !== narrativeTick) return;
+    innerEl.classList.remove("narr-inner-out", "narr-box-reveal-prep", "narr-box-reveal-run");
+    innerEl.innerHTML = formatNarrativeHtml(text || "");
+  }
+
+  function setupChartNarrativeLayer() {
+    if (narrativeLayerCleanup) {
+      narrativeLayerCleanup();
+      narrativeLayerCleanup = null;
+    }
+    narrativeLastIdx = -1;
+    const layer = document.getElementById("narrative-scroll-layer");
+    const inner = document.getElementById("narrative-scroll-inner");
+    const dock = document.getElementById("viz-side-dock");
+    const chartsHost = document.getElementById("charts");
+    if (!layer || !inner || !dock) return;
+
+    const panels = [].slice.call(document.querySelectorAll(".chart-panel-split"));
+    if (!panels.length) return;
+
+    const panelByNarrIdx = {};
+    panels.forEach(function (p) {
+      const ix = parseInt(p.getAttribute("data-narr-idx"), 10);
+      if (!isNaN(ix) && ix >= 0) panelByNarrIdx[ix] = p;
+    });
+
+    var narrActiveLatch = false;
+
+    function syncChartsNarrShift() {
+      if (!chartsHost) return;
+      if (dock.classList.contains("visible")) chartsHost.classList.add("charts--narr-open");
+      else chartsHost.classList.remove("charts--narr-open");
+    }
+
+    function syncChartPanelsFocus(activeIdx) {
+      panels.forEach(function (p) {
+        p.classList.remove("chart-focus", "chart-dim");
+        if (activeIdx < 0) return;
+        const ix = parseInt(p.getAttribute("data-narr-idx"), 10);
+        if (isNaN(ix)) return;
+        if (ix === activeIdx) p.classList.add("chart-focus");
+        else p.classList.add("chart-dim");
+      });
+    }
+
+    var stepper = document.getElementById("chart-stepper");
+    function syncStepper(activeIdx) {
+      if (!stepper) return;
+      var chartsEl = document.getElementById("charts");
+      if (activeIdx >= 0) {
+        stepper.classList.add("visible");
+        if (chartsEl) chartsEl.classList.add("charts--stepper-open");
+      } else {
+        stepper.classList.remove("visible");
+        if (chartsEl) chartsEl.classList.remove("charts--stepper-open");
+      }
+      stepper.querySelectorAll(".stepper-item").forEach(function (row) {
+        var dot = row.querySelector(".stepper-dot");
+        if (!dot) return;
+        var si = parseInt(dot.getAttribute("data-step-idx"), 10);
+        if (si === activeIdx) {
+          dot.classList.add("active");
+          row.classList.add("stepper-item--active");
+        } else {
+          dot.classList.remove("active");
+          row.classList.remove("stepper-item--active");
+        }
+      });
+    }
+
+    function allowNarrativeHandoff(fromIdx, toIdx, vh) {
+      if (toIdx < 0) return false;
+      const pad = Math.max(48, vh * 0.07);
+      if (fromIdx < 0) {
+        if (toIdx === 0) return true;
+        const prevChart = panelByNarrIdx[toIdx - 1];
+        if (!prevChart) return true;
+        return prevChart.getBoundingClientRect().bottom <= pad;
+      }
+      if (toIdx > fromIdx) {
+        const prevChart = panelByNarrIdx[toIdx - 1];
+        if (!prevChart) return true;
+        return prevChart.getBoundingClientRect().bottom <= pad;
+      }
+      if (toIdx < fromIdx) {
+        const nextChart = panelByNarrIdx[toIdx + 1];
+        if (!nextChart) return true;
+        return nextChart.getBoundingClientRect().top >= vh - pad;
+      }
+      return true;
+    }
+
+    function update() {
+      const vh = window.innerHeight || 600;
+      const mid = vh * 0.48;
+      let best = -1;
+      let bestScore = 0;
+      panels.forEach(function (p) {
+        const idx = parseInt(p.getAttribute("data-narr-idx"), 10);
+        if (isNaN(idx) || idx < 0) return;
+        const r = p.getBoundingClientRect();
+        const overlap = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+        const visible = overlap > 0 ? overlap / Math.max(1, Math.min(r.height, vh)) : 0;
+        const cy = (r.top + r.bottom) / 2;
+        const dist = Math.abs(cy - mid);
+        const score = visible * (1 / (1 + dist / Math.max(vh, 1)));
+        if (score > bestScore) {
+          bestScore = score;
+          best = idx;
+        }
+      });
+
+      var maxNarrIdx = -1;
+      panels.forEach(function (p) {
+        var pix = parseInt(p.getAttribute("data-narr-idx"), 10);
+        if (!isNaN(pix) && pix > maxNarrIdx) maxNarrIdx = pix;
+      });
+      var outroEl = document.querySelector(".viz-snap-outro");
+      if (outroEl && maxNarrIdx >= 0) {
+        var obr = outroEl.getBoundingClientRect();
+        var outroInView = obr.top < vh - 48 && obr.bottom > 64;
+        if (outroInView) {
+          best = maxNarrIdx;
+          bestScore = 0.28;
+        }
+      }
+
+      var showNarr = best >= 0 && (bestScore > 0.078 || (narrActiveLatch && bestScore > 0.036));
+      if (showNarr) {
+        narrActiveLatch = true;
+        if (narrativeLastIdx !== best && !allowNarrativeHandoff(narrativeLastIdx, best, vh)) {
+          syncChartsNarrShift();
+          var hold = narrativeLastIdx >= 0 ? narrativeLastIdx : -1;
+          syncChartPanelsFocus(hold);
+          syncStepper(hold);
+          return;
+        }
+        const tk = ++narrativeTick;
+        dock.classList.add("visible");
+        layer.classList.add("visible");
+        applyNarrativeText(inner, CHART_NARRATIVE_TEXTS[best] || "", tk);
+        narrativeLastIdx = best;
+        inner.classList.remove("narr-inner-out");
+        syncChartsNarrShift();
+        syncChartPanelsFocus(best);
+        syncStepper(best);
+      } else {
+        narrActiveLatch = false;
+        narrativeTick++;
+        dock.classList.remove("visible");
+        layer.classList.remove("visible");
+        inner.innerHTML = "";
+        narrativeLastIdx = -1;
+        syncChartsNarrShift();
+        syncChartPanelsFocus(-1);
+        syncStepper(-1);
+      }
+    }
+
+    var narrRaf = 0;
+    function scheduleNarrativeUpdate() {
+      if (narrRaf) return;
+      narrRaf = requestAnimationFrame(function () {
+        narrRaf = 0;
+        update();
+      });
+    }
+
+    var io;
+    try {
+      io = new IntersectionObserver(scheduleNarrativeUpdate, {
+        root: null,
+        threshold: [0, 0.05, 0.12, 0.25, 0.45, 0.65, 1],
+        rootMargin: "-10% 0px -14% 0px"
+      });
+      panels.forEach(function (p) {
+        io.observe(p);
+      });
+    } catch (e1) { /* ignore */ }
+
+    window.addEventListener("scroll", scheduleNarrativeUpdate, { passive: true });
+    window.addEventListener("resize", scheduleNarrativeUpdate, { passive: true });
+
+    narrativeLayerCleanup = function () {
+      try {
+        if (io) io.disconnect();
+      } catch (e2) { /* ignore */ }
+      window.removeEventListener("scroll", scheduleNarrativeUpdate);
+      window.removeEventListener("resize", scheduleNarrativeUpdate);
+    };
+
+    scheduleNarrativeUpdate();
+  }
+
+  function renderCharts() {
+    const host = document.getElementById("charts");
+    if (!host) return;
+
+    var stepperPre = document.getElementById("chart-stepper");
+    if (stepperPre) {
+      stepperPre.innerHTML = "";
+      stepperPre.classList.remove("visible");
+      delete stepperPre.dataset.built;
+    }
+    host.classList.remove("charts--stepper-open", "charts--narr-open");
+    host.innerHTML = "";
+
+    let narrIdx = 0;
+
+    function addPanel(title, hint, renderFn, stepLabelEn) {
+      const sec = document.createElement("section");
+      sec.setAttribute("data-narr-idx", String(narrIdx));
+      sec.setAttribute("data-step-label-en", stepLabelEn || "");
+      sec.className = "panel chart-panel chart-panel-split chart-snap-page " + (narrIdx % 2 === 0 ? "z-left" : "z-right");
+      const idx = narrIdx;
+      narrIdx++;
+
+      const stickyH = document.createElement("div");
+      stickyH.className = "chart-sticky-header";
+      stickyH.innerHTML =
+        '<span class="chart-sticky-num">0' +
+        (idx + 1) +
+        ' /</span><span class="chart-sticky-title">' +
+        esc(title) +
+        "</span>";
+      sec.appendChild(stickyH);
+
+      const vis = document.createElement("div");
+      vis.className = "chart-visual-centered";
+      const h3 = document.createElement("h3");
+      h3.textContent = title;
+      const subt = document.createElement("p");
+      subt.className = "subt";
+      subt.textContent = hint;
+      const headRail = document.createElement("div");
+      headRail.className = "chart-heading-rail";
+      headRail.appendChild(h3);
+      headRail.appendChild(subt);
+      vis.appendChild(headRail);
+
+      const row = document.createElement("div");
+      row.className = "chart-row";
+      const main = document.createElement("div");
+      main.className = "chart-row-main";
+      const ch = document.createElement("div");
+      ch.className = "chart-host";
+      const cap = document.createElement("aside");
+      cap.className = "chart-figure-caption";
+      main.appendChild(ch);
+      row.appendChild(main);
+      row.appendChild(cap);
+      vis.appendChild(row);
+      sec.appendChild(vis);
+      host.appendChild(sec);
+
+      attachChartOnView(sec, ch, renderFn);
+
+      requestAnimationFrame(function () {
+        const h3e = headRail.querySelector("h3");
+        const ste = headRail.querySelector(".subt");
+        if (h3e) {
+          const t = h3e.textContent;
+          h3e.textContent = "";
+          pixelRevealPlainText(h3e, t, 0);
+        }
+        if (ste) {
+          const t2 = ste.textContent;
+          ste.textContent = "";
+          pixelRevealPlainText(ste, t2, 0.04);
+        }
+      });
+    }
+
+    addPanel(
+      "表达直接性 · 螺旋点云",
+      "黄金角铺点、半透明配色；悬停同类亮显；点击筛直接性。",
+      function (box) { s3ChartDonutDirect(box, rowsExact()); },
+      "螺旋·直接性"
+    );
+    addPanel(
+      "阶段 × 场景 · 表情包矩阵",
+      "横轴六阶段、纵轴社交场景；全量有图样本，边长∝√字数；灰/青边=黑白/彩色；点击筛阶段+场景。",
+      function (box) { s3ChartHBarSubstage(box, rowsExact()); },
+      "矩阵·阶段场景表情包"
+    );
+    addPanel(
+      "原始情绪 × 包装后 · 弦图",
+      "丝带依次淡入；悬停单条高亮；点击弧筛原情或包后。",
+      function (box) { s3ChartHeatmapOrigPack(box, rowsExact()); },
+      "弦图·原情包后"
+    );
+    addPanel(
+      "包装度 × 贴近真实 · 密度+散点",
+      "列内密度轮廓+散点+均值/中位线；悬停同列高亮；点半径∝√字数。",
+      function (box) { s3ChartStripPackReal(box, rowsExact()); },
+      "密度散点·包装真实"
+    );
+    addPanel(
+      "关系 × 场景 · 社交功能着色热力格",
+      "矩阵格≠曲线束；格内 n 与主社交功能一目了然；点击格筛关系+场景。",
+      function (box) { s3ChartRoseSocial(box, rowsExact()); },
+      "热力格·关系场景功能"
+    );
+    addPanel(
+      "关系 × 风险 · 曲线束",
+      "左行→右档的贝塞尔束，线宽∝条数；悬停单束；点击双筛。",
+      function (box) { s3ChartStackRelRisk(box, rowsExact()); },
+      "曲线束·关系风险"
+    );
+    addPanel(
+      "黑白/彩色 × 阶段 · 中线发散条",
+      "中轴分界，左右条长=条数；轴向渐变，弱化纯色块；点击左/右条筛选。",
+      function (box) { s3ChartGroupedBWBySub(box, rowsExact()); },
+      "发散条·阶段色媒"
+    );
+    addPanel(
+      "社交场景 · 径向条形",
+      "极坐标扇形条，外伸∝条数；虚环刻度；悬停高亮；点击筛场景。",
+      function (box) { s3ChartLollipopSocialScene(box, rowsExact()); },
+      "径向条·场景"
+    );
+    addPanel(
+      "直接性 × 场景 · 矩阵气泡",
+      "气泡面积∝交叉 n；Voronoi 吸附+十字准线；点击圆双筛。",
+      function (box) { s3ChartMatrixBubbleDirectScene(box, rowsExact()); },
+      "矩阵气泡·场景直接"
+    );
+
+    var stepper = document.getElementById("chart-stepper");
+    if (stepper && !stepper.dataset.built) {
+      stepper.dataset.built = "1";
+      stepper.innerHTML = "";
+      var panelList = [].slice.call(document.querySelectorAll(".chart-panel-split"));
+      panelList.forEach(function (p, i) {
+        var row = document.createElement("div");
+        row.className = "stepper-item";
+        var lab = document.createElement("span");
+        lab.className = "stepper-label";
+        lab.setAttribute("lang", "zh-CN");
+        lab.textContent = p.getAttribute("data-step-label-en") || "图表 " + (i + 1);
+        var dot = document.createElement("button");
+        dot.type = "button";
+        dot.className = "stepper-dot";
+        var en = p.getAttribute("data-step-label-en") || "";
+        dot.setAttribute("aria-label", "图表 " + (i + 1) + (en ? "：" + en : ""));
+        dot.setAttribute("data-step-idx", String(i));
+        dot.addEventListener("click", function () {
+          p.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+        row.appendChild(dot);
+        row.appendChild(lab);
+        stepper.appendChild(row);
+      });
+    }
+
+    setupChartNarrativeLayer();
+  }
+
+  function render() {
+    const statLine = document.getElementById("stat-line");
+    const nextN = String(rowsExact().length);
+    const totalN = String(ALL.length);
+    if (statLine) {
+      if (statLine.dataset.ready === "1" && statLine.dataset.lastMatch !== nextN) {
+        statLine.classList.remove("stat-pulse");
+        void statLine.offsetWidth;
+        statLine.classList.add("stat-pulse");
+      }
+      statLine.dataset.ready = "1";
+      statLine.dataset.lastMatch = nextN;
+      statLine.innerHTML = "";
+      pixelRevealPlainText(statLine, "样本数量 " + nextN + " / " + totalN + " 张", 0);
+    }
+    renderFiltersBar();
+    renderPhases();
+    renderCharts();
+  }
+
+  function updateChartScrollDepth() {
+    var vh = window.innerHeight || 600;
+    var mid = vh * 0.5;
+    document.querySelectorAll(".chart-snap-page.chart-panel-split").forEach(function (sec) {
+      var r = sec.getBoundingClientRect();
+      var cy = (r.top + r.bottom) / 2;
+      var dist = Math.abs(cy - mid) / Math.max(vh, 1);
+      var n = Math.max(0, Math.min(1, 1 - dist * 1.15));
+      sec.style.setProperty("--viz-n", n.toFixed(4));
+    });
+  }
+
+  function onScroll() {
+    const p = document.getElementById("progress");
+    const max = document.body.scrollHeight - innerHeight || 1;
+    const pct = scrollY / max;
+    if (p) {
+      var vw = window.innerWidth || 1200;
+      p.style.width = pct * vw + "px";
+    }
+    updateChartScrollDepth();
+    var tp = document.getElementById("title-parallax");
+    if (tp) tp.style.transform = "translateY(" + scrollY * 0.045 + "px)";
+  }
+
+  window.addEventListener("scroll", onScroll, { passive: true });
+
+  function initPixelCube() {
+    const el = document.getElementById("pixelCube");
+    const hero = document.querySelector(".hero-pixel");
+    if (!el || !hero) return;
+    let ryDeg = 0;
+    function isWheelOverCube(e) {
+      if (e.target && e.target.closest && e.target.closest("#pixelCube")) return true;
+      var r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) return false;
+      var pad = Math.max(64, (r.width + r.height) * 0.14);
+      return e.clientX >= r.left - pad && e.clientX <= r.right + pad &&
+        e.clientY >= r.top - pad && e.clientY <= r.bottom + pad;
+    }
+    hero.addEventListener(
+      "wheel",
+      function (e) {
+        if (!isWheelOverCube(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        ryDeg += e.deltaY * 0.11;
+        el.style.setProperty("--cube-ry", ryDeg + "deg");
+      },
+      { passive: false }
+    );
+    hero.addEventListener("mousemove", function (e) {
+      const r = hero.getBoundingClientRect();
+      const nx = (e.clientX - r.left) / Math.max(r.width, 1) - 0.5;
+      const ny = (e.clientY - r.top) / Math.max(r.height, 1) - 0.5;
+      el.style.setProperty("--cube-rx", ny * -10 + "deg");
+      el.style.setProperty("--cube-ry-mouse", nx * 14 + "deg");
+    });
+    hero.addEventListener("mouseleave", function () {
+      el.style.setProperty("--cube-rx", "0deg");
+      el.style.setProperty("--cube-ry-mouse", "0deg");
+    });
+    function frame() {
+      ryDeg += 0.018;
+      el.style.setProperty("--cube-ry", ryDeg + "deg");
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function initPixelTextReveal() {
+    const h1 = document.getElementById("pixTitleHost");
+    const sub = document.getElementById("pixSubHost");
+    if (h1 && !h1.dataset.pixDone) {
+      const t = h1.textContent;
+      pixelRevealPlainText(h1, t, 0);
+      h1.dataset.pixDone = "1";
+    }
+    if (sub && !sub.dataset.pixDone) {
+      const t = sub.textContent;
+      pixelRevealPlainText(sub, t, 0.12);
+      sub.dataset.pixDone = "1";
+    }
+  }
+
+  function initCubeFacesPixelText() {
+    document.querySelectorAll(".cube-face.side .face-num").forEach(function (el, i) {
+      const t = el.textContent;
+      el.textContent = "";
+      pixelRevealPlainText(el, t, 0.03 + i * 0.04);
+    });
+    document.querySelectorAll(".cube-face.side .cube-text").forEach(function (el, i) {
+      const t = el.textContent;
+      el.textContent = "";
+      pixelRevealPlainText(el, t, 0.08 + i * 0.05);
+    });
+  }
+
+  function initStaticPagePixelText() {
+    if (document.body.dataset.pagePixInit === "1") return;
+    document.body.dataset.pagePixInit = "1";
+    const hint = document.querySelector(".hero-scroll-hint");
+    if (hint) pixelRevealElementText(hint);
+    const dockTitle = document.querySelector(".filters-dock-title");
+    if (dockTitle) pixelRevealElementText(dockTitle);
+    const dockArrow = document.querySelector(".filters-dock-arrow");
+    if (dockArrow) pixelRevealElementText(dockArrow);
+    const badge = document.querySelector(".panel-phase-strip .badge");
+    if (badge) pixelRevealElementText(badge);
+    const ph2 = document.querySelector(".panel-phase-strip .h2-compact");
+    if (ph2) pixelRevealElementText(ph2);
+    const phint = document.querySelector(".panel-phase-strip .hint-compact");
+    if (phint) pixelRevealElementText(phint);
+    const foot = document.querySelector("footer.foot");
+    if (foot) pixelRevealElementText(foot);
+    const phaseNav = document.querySelector("a.phase-nav-btn");
+    if (phaseNav) pixelRevealElementText(phaseNav);
+    document.querySelectorAll(".cube-face.cap-top.side, .cube-face.cap-bottom.side").forEach(function (cap) {
+      const t = cap.textContent;
+      cap.textContent = "";
+      pixelRevealPlainText(cap, t, 0.12);
+    });
+  }
+
+  function initScrollGuideBtn() {
+    const btn = document.getElementById("scroll-guide-btn");
+    if (!btn) return;
+    btn.classList.remove("hidden");
+    if (btn.dataset.bound === "1") return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", function () {
+      var els = [];
+      var phasePage = document.querySelector(".viz-snap-phase-page");
+      if (phasePage) els.push(phasePage);
+      document.querySelectorAll(".chart-panel-split").forEach(function (n) { els.push(n); });
+      var outro = document.querySelector(".viz-snap-outro");
+      if (outro) els.push(outro);
+      if (!els.length) {
+        window.scrollBy({ top: Math.min(innerHeight * 0.85, 640), behavior: "smooth" });
+        return;
+      }
+      var st = window.pageYOffset || document.documentElement.scrollTop;
+      var vh = window.innerHeight || 600;
+      var probe = st + Math.min(100, vh * 0.12);
+      var i, t, rect;
+      for (i = 0; i < els.length; i++) {
+        rect = els[i].getBoundingClientRect();
+        t = rect.top + st;
+        if (t > probe + 8) {
+          els[i].scrollIntoView({ behavior: "smooth", block: "start" });
+          return;
+        }
+      }
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
+  function boot() {
+    ALL = window.__ROWS__ || [];
+    initPixelCube();
+    initCubeFacesPixelText();
+    initPixelTextReveal();
+    initStaticPagePixelText();
+    initScrollGuideBtn();
+    render();
+    onScroll();
+    var t;
+    window.addEventListener("resize", function () {
+      clearTimeout(t);
+      t = setTimeout(function () {
+        render();
+        onScroll();
+      }, 250);
+    });
+  }
+
+  boot();
+})();
+
+    </script>
+</body>
+</html>
